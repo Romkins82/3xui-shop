@@ -37,12 +37,12 @@ async def notify_users_with_expiring_subscription(
             client_data = await vpn_service.get_client_data(user)
 
             # Skip if no client data or subscription is unlimited
-            if not client_data or client_data._expiry_time == -1:
+            if not client_data or client_data.expiry_timestamp == -1:
                 continue
 
             now = datetime.now(timezone.utc)
             expiry_datetime = datetime.fromtimestamp(
-                client_data._expiry_time / 1000, timezone.utc
+                client_data.expiry_timestamp / 1000, timezone.utc
             )
             time_left = expiry_datetime - now
 

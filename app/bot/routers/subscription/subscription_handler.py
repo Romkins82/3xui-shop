@@ -131,7 +131,7 @@ async def callback_subscription_process(
     services: ServicesContainer,
 ) -> None:
     logger.info(f"User {user.tg_id} started subscription process.")
-    servers = await services.server_pool.get_available_servers()
+    servers = await services.server_pool.get_all_servers()
 
     if not servers:
         await services.notification.show_popup(
@@ -194,7 +194,7 @@ async def callback_server_selected(
         callback_data.server_id,
     )
 
-    servers = await services.server_pool.get_available_servers()
+    servers = await services.server_pool.get_all_servers()
 
     if not callback_data.server_id:
         callback_data.state = NavSubscription.SERVER

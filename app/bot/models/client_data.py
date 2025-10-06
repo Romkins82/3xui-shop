@@ -41,7 +41,7 @@ class ClientData:
         devices = self._max_devices
         if devices == -1:
             return UNLIMITED
-        return devices
+        return str(devices)
 
     @property
     def traffic_total(self) -> str:
@@ -66,6 +66,10 @@ class ClientData:
     @property
     def expiry_timestamp(self) -> int:
         return self._expiry_timestamp
+        
+    @property
+    def expiry_time(self) -> str:
+        return self._expiry_time_str
 
     @property
     def expiry_time_str(self) -> str:

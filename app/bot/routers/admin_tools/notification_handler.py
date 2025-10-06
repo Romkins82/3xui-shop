@@ -40,11 +40,8 @@ class NotificationStates(StatesGroup):
 
 async def show_notification_main(message: Message, state: FSMContext) -> None:
     await state.set_state(None)
-    main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
-    await message.bot.edit_message_text(
+    await message.edit_text(
         text=_("notification:message:main"),
-        chat_id=message.chat.id,
-        message_id=main_message_id,
         reply_markup=notification_keyboard(),
     )
 
@@ -56,6 +53,7 @@ async def callback_send_notification(
     state: FSMContext,
 ) -> None:
     logger.info(f"Admin {user.tg_id} opened send notification.")
+    await state.update_data({MAIN_MESSAGE_ID_KEY: callback.message.message_id})
     await show_notification_main(message=callback.message, state=state)
 
 
@@ -86,18 +84,20 @@ async def message_user_id(
     else:
         user_id = message.text.strip()
     logger.info(f"Admin {user.tg_id} sent user id {user_id} for notification.")
+    
+    await message.delete()
 
     if is_valid_user_id(user_id):
-        user = await User.get(session=session, tg_id=user_id)
+        target_user = await User.get(session=session, tg_id=user_id)
 
-        if user:
+        if target_user:
             await state.update_data({NOTIFICATION_CHAT_IDS_KEY: [user_id]})
             main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
             await state.set_state(NotificationStates.message_to_user)
             await message.bot.edit_message_text(
                 text=_("notification:message:send_message_for_user").format(
                     user_id=user_id,
-                    first_name=user.first_name,
+                    first_name=target_user.first_name,
                 ),
                 chat_id=message.chat.id,
                 message_id=main_message_id,
@@ -128,6 +128,8 @@ async def message_to_user(
     user_ids = await state.get_value(NOTIFICATION_CHAT_IDS_KEY)
     user_id = user_ids[0]
     logger.info(f"Admin {user.tg_id} sent message for user {user_id}.")
+    
+    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})
@@ -166,7 +168,7 @@ async def callback_confirm_send_notification(
             text=_("notification:ntf:invalid_message_text"),
             duration=5,
         )
-        return None
+        return
 
     user_id = await state.get_value(NOTIFICATION_CHAT_IDS_KEY)
     notification = await services.notification.notify_by_id(chat_id=user_id[0], text=text)
@@ -212,6 +214,8 @@ async def message_to_all(
 ) -> None:
     text = message.text.strip()
     logger.info(f"Admin {user.tg_id} sent message for all.")
+    
+    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})
@@ -251,7 +255,7 @@ async def callback_confirm_send_notification_all(
             text=_("notification:ntf:invalid_message_text"),
             duration=5,
         )
-        return None
+        return
 
     await state.update_data({NOTIFICATION_MESSAGE_TEXT_KEY: text})
     users = await User.get_all(session=session)
@@ -334,6 +338,8 @@ async def message_edit(
 ) -> None:
     text = message.text.strip()
     logger.info(f"Admin {user.tg_id} edit notification.")
+    
+    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})
@@ -375,7 +381,7 @@ async def callback_confirm_edit_notification(
             text=_("notification:ntf:invalid_message_text"),
             duration=5,
         )
-        return None
+        return
 
     await state.update_data({NOTIFICATION_MESSAGE_TEXT_KEY: text})
 
@@ -389,18 +395,18 @@ async def callback_confirm_edit_notification(
                 duration=5,
             )
         success = 0
-        edited = False
+        edited_message = None
         for chat_id, last_message_id in zip(chat_ids, last_message_ids):
 
             try:
-                edited = await callback.message.bot.edit_message_text(
+                edited_message = await callback.message.bot.edit_message_text(
                     text=text,
                     chat_id=chat_id,
                     message_id=last_message_id,
                     reply_markup=close_notification_keyboard(),
                 )
 
-                if edited:
+                if edited_message:
                     success += 1
             except Exception as exception:
                 logger.error(
@@ -414,13 +420,13 @@ async def callback_confirm_edit_notification(
 
         await show_notification_main(message=callback.message, state=state)
 
-        if not edited:
+        if not edited_message:
             await services.notification.notify_by_message(
                 message=callback.message,
                 text=_("notification:ntf:edited_failed"),
                 duration=5,
             )
-            return None
+            return
 
         if chat_ids_count > 1:
             await services.notification.notify_by_message(
@@ -458,9 +464,9 @@ async def callback_delete_notification(
     chat_ids_count = len(chat_ids)
 
     if last_message_ids and chat_ids and chat_ids_count > 0:
+        deleted = False
+        success = 0
         for chat_id, last_message_id in zip(chat_ids, last_message_ids):
-            deleted = False
-            success = 0
 
             try:
                 deleted = await callback.message.bot.delete_message(
@@ -485,7 +491,7 @@ async def callback_delete_notification(
                 text=_("notification:ntf:deleted_failed"),
                 duration=5,
             )
-            return None
+            return
 
         if chat_ids_count > 1:
             await services.notification.notify_by_message(

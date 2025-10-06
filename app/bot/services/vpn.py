@@ -11,6 +11,7 @@ from py3xui import Client, Inbound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.models import ClientData
+from app.bot.utils.formatting import format_remaining_time
 from app.bot.utils.network import extract_base_url
 from app.bot.utils.time import (
     add_days_to_timestamp,
@@ -90,7 +91,8 @@ class VPNService:
                 traffic_used=traffic_used,
                 traffic_up=client.up,
                 traffic_down=client.down,
-                expiry_time=expiry_time,
+                expiry_timestamp=expiry_time,
+                expiry_time_str=format_remaining_time(expiry_time),
             )
             logger.debug(f"Successfully retrieved client data for {user.tg_id}: {client_data}.")
             return client_data
@@ -122,10 +124,9 @@ class VPNService:
         enable: bool = True,
         flow: str = "xtls-rprx-vision",
         total_gb: int = 0,
-        inbound_id: int = 1,
     ) -> bool:
         logger.info(f"Creating new client {user.tg_id} | {devices} devices {duration} days.")
-        await self.server_pool_service.assign_server_to_user(user)
+        await self.server_pool_service.assign_server_to_user(user, server_id)
         connection = await self.server_pool_service.get_connection(user)
         if not connection:
             return False
@@ -191,9 +192,9 @@ class VPNService:
             logger.error(f"Error updating client {user.tg_id}: {exception}")
             return False
 
-    async def create_subscription(self, user: User, devices: int, duration: int) -> bool:
+    async def create_subscription(self, user: User, devices: int, duration: int, server_id: int | None = None) -> bool:
         if not await self.is_client_exists(user):
-            return await self.create_client(user=user, devices=devices, duration=duration)
+            return await self.create_client(user=user, devices=devices, duration=duration, server_id=server_id)
         return False
 
     async def extend_subscription(self, user: User, devices: int, duration: int) -> bool:
@@ -215,20 +216,20 @@ class VPNService:
             )
         return False
 
-    async def process_bonus_days(self, user: User, duration: int, devices: int) -> bool:
+    async def process_bonus_days(self, user: User, duration: int, devices: int, server_id: int | None = None) -> bool:
         if await self.is_client_exists(user):
             updated = await self.update_client(user=user, devices=0, duration=duration)
             if updated:
                 logger.info(f"Updated client {user.tg_id} with additional {duration} days(-s).")
                 return True
         else:
-            created = await self.create_client(user=user, devices=devices, duration=duration)
+            created = await self.create_client(user=user, devices=devices, duration=duration, server_id=server_id)
             if created:
                 logger.info(f"Created client {user.tg_id} with additional {duration} days(-s)")
                 return True
         return False
 
-    async def activate_promocode(self, user: User, promocode: Promocode) -> bool:
+    async def activate_promocode(self, user: User, promocode: Promocode, server_id: int | None = None) -> bool:
         async with self.session() as session:
             activated = await Promocode.set_activated(
                 session=session,
@@ -243,6 +244,7 @@ class VPNService:
             user,
             duration=promocode.duration,
             devices=self.config.shop.BONUS_DEVICES_COUNT,
+            server_id=server_id,
         )
         if success:
             return True

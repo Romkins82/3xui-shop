@@ -44,6 +44,8 @@ class NavSubscription(str, Enum):
     DURATION = "duration"
     PROMOCODE = "promocode"
     GET_TRIAL = "get_trial"
+    TRIAL_SERVER = "trial_server"
+    PROMOCODE_SERVER = "promocode_server"
 
     PAY = "pay"
     PAY_YOOKASSA = f"{PAY}_yookassa"

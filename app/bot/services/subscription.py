@@ -40,7 +40,7 @@ class SubscriptionService:
 
         return not referral or (referral and not self.config.shop.REFERRED_TRIAL_ENABLED)
 
-    async def gift_trial(self, user: User) -> bool:
+    async def gift_trial(self, user: User, server_id: int | None = None) -> bool:
         if not await self.is_trial_available(user=user):
             logger.warning(
                 f"Failed to activate trial for user {user.tg_id}. Trial period is not available."
@@ -61,6 +61,7 @@ class SubscriptionService:
             user,
             duration=self.config.shop.TRIAL_PERIOD,
             devices=self.config.shop.BONUS_DEVICES_COUNT,
+            server_id=server_id,
         )
 
         if trial_success:

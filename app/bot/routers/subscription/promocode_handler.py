@@ -7,13 +7,13 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.i18n import gettext as _
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.models import ServicesContainer
+from app.bot.models import ServicesContainer, SubscriptionData
 from app.bot.utils.constants import MAIN_MESSAGE_ID_KEY
 from app.bot.utils.formatting import format_subscription_period
 from app.bot.utils.navigation import NavSubscription
 from app.db.models import Promocode, User
 
-from .keyboard import promocode_keyboard
+from .keyboard import promocode_keyboard, server_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -21,6 +21,7 @@ router = Router(name=__name__)
 
 class ActivatePromocodeStates(StatesGroup):
     promocode_input = State()
+    selecting_server = State()
 
 
 @router.callback_query(F.data == NavSubscription.PROMOCODE)
@@ -44,33 +45,72 @@ async def handle_promocode_input(
     input_promocode = message.text.strip()
     logger.info(f"User {user.tg_id} entered promocode: {input_promocode} for activating.")
 
-    server = await services.server_pool.get_available_server()
-
-    if not server:
-        await services.notification.notify_by_message(
-            message=message,
-            text=_("promocode:ntf:no_available_servers"),
-            duration=5,
-        )
-        return
-
     promocode = await Promocode.get(session=session, code=input_promocode)
     if promocode and not promocode.is_activated:
-        success = await services.vpn.activate_promocode(user=user, promocode=promocode)
-        main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
-        if success:
-            await message.bot.edit_message_text(
-                text=_("promocode:message:activated_success").format(
-                    promocode=input_promocode,
-                    duration=format_subscription_period(promocode.duration),
-                ),
-                chat_id=message.chat.id,
-                message_id=main_message_id,
-                reply_markup=promocode_keyboard(),
+        servers = await services.server_pool.get_available_servers()
+        if not servers:
+            await services.notification.notify_by_message(
+                message=message,
+                text=_("promocode:ntf:no_available_servers"),
+                duration=5,
             )
-        else:
-            text = _("promocode:ntf:activate_failed")
-            await services.notification.notify_by_message(message=message, text=text, duration=5)
+            return
+
+        await state.update_data(promocode=input_promocode)
+        await state.set_state(ActivatePromocodeStates.selecting_server)
+        
+        callback_data = SubscriptionData(state=NavSubscription.PROMOCODE_SERVER, user_id=user.tg_id)
+        await message.answer(
+            text=_("subscription:message:server"),
+            reply_markup=server_keyboard(servers, callback_data),
+        )
+
     else:
         text = _("promocode:ntf:activate_invalid").format(promocode=input_promocode)
         await services.notification.notify_by_message(message=message, text=text, duration=5)
+
+
+@router.callback_query(
+    SubscriptionData.filter(F.state == NavSubscription.PROMOCODE_SERVER),
+    ActivatePromocodeStates.selecting_server,
+)
+async def callback_promocode_server_selected(
+    callback: CallbackQuery,
+    user: User,
+    session: AsyncSession,
+    state: FSMContext,
+    services: ServicesContainer,
+    callback_data: SubscriptionData,
+) -> None:
+    data = await state.get_data()
+    promocode_code = data.get("promocode")
+    server_id = callback_data.server_id
+    
+    logger.info(f"User {user.tg_id} selected server {server_id} for promocode {promocode_code}.")
+
+    promocode = await Promocode.get(session=session, code=promocode_code)
+    success = await services.vpn.activate_promocode(user=user, promocode=promocode, server_id=server_id)
+    
+    main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
+    
+    # We need to edit the main menu message, not the server selection message
+    # Let's delete the server selection message first
+    await callback.message.delete()
+
+    if success:
+        # And now edit the main menu message
+        await callback.bot.edit_message_text(
+            text=_("promocode:message:activated_success").format(
+                promocode=promocode_code,
+                duration=format_subscription_period(promocode.duration),
+            ),
+            chat_id=callback.message.chat.id,
+            message_id=main_message_id,
+            reply_markup=promocode_keyboard(), # Or another appropriate keyboard
+        )
+    else:
+        text = _("promocode:ntf:activate_failed")
+        # Since we deleted the callback message, we need to send a new one
+        await callback.message.answer(text=text)
+
+    await state.set_state(None)

@@ -36,11 +36,8 @@ class EditPromocodeStates(StatesGroup):
 
 async def show_promocode_editor_main(message: Message, state: FSMContext) -> None:
     await state.set_state(None)
-    main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
-    await message.bot.edit_message_text(
+    await message.edit_text(
         text=_("promocode_editor:message:main"),
-        chat_id=message.chat.id,
-        message_id=main_message_id,
         reply_markup=promocode_editor_keyboard(),
     )
 
@@ -48,6 +45,8 @@ async def show_promocode_editor_main(message: Message, state: FSMContext) -> Non
 @router.callback_query(F.data == NavAdminTools.PROMOCODE_EDITOR, IsAdmin())
 async def callback_promocode_editor(callback: CallbackQuery, user: User, state: FSMContext) -> None:
     logger.info(f"Admin {user.tg_id} opened promocode editor.")
+    # Сохраняем ID текущего сообщения, чтобы к нему можно было вернуться
+    await state.update_data({MAIN_MESSAGE_ID_KEY: callback.message.message_id})
     await show_promocode_editor_main(message=callback.message, state=state)
 
 
@@ -105,7 +104,7 @@ async def callback_delete_promocode(callback: CallbackQuery, user: User, state: 
 
 
 @router.message(DeletePromocodeStates.promocode_input, IsAdmin())
-async def handle_promocode_input(
+async def handle_promocode_input_delete(
     message: Message,
     user: User,
     session: AsyncSession,
@@ -114,9 +113,24 @@ async def handle_promocode_input(
 ) -> None:
     input_promocode = message.text.strip()
     logger.info(f"Admin {user.tg_id} entered promocode: {input_promocode} for deleting.")
+    
+    # Получаем ID сообщения, которое нужно будет отредактировать
+    data = await state.get_data()
+    main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
+
+    # Удаляем сообщение пользователя с промокодом
+    await message.delete()
 
     if await Promocode.delete(session=session, code=input_promocode):
-        await show_promocode_editor_main(message=message, state=state)
+        # Редактируем исходное сообщение админ-панели
+        await message.bot.edit_message_text(
+            text=_("promocode_editor:message:main"),
+            chat_id=message.chat.id,
+            message_id=main_message_id,
+            reply_markup=promocode_editor_keyboard(),
+        )
+        await state.set_state(None)
+
         await services.notification.notify_by_message(
             message=message,
             text=_("promocode_editor:ntf:deleted_success").format(promocode=input_promocode),
@@ -129,14 +143,13 @@ async def handle_promocode_input(
             duration=5,
         )
 
-
 # endregion
 
 
 # region Edit Promocode
 @router.callback_query(F.data == NavAdminTools.EDIT_PROMOCODE, IsAdmin())
 async def callback_edit_promocode(callback: CallbackQuery, user: User, state: FSMContext) -> None:
-    logger.info(f"Admin {user.tg_id} started deleting promocode.")
+    logger.info(f"Admin {user.tg_id} started editing promocode.")
     await state.set_state(EditPromocodeStates.promocode_input)
     await callback.message.edit_text(
         text=_("promocode_editor:message:edit"),
@@ -145,7 +158,7 @@ async def callback_edit_promocode(callback: CallbackQuery, user: User, state: FS
 
 
 @router.message(EditPromocodeStates.promocode_input, IsAdmin())
-async def handle_promocode_input(
+async def handle_promocode_input_edit(
     message: Message,
     user: User,
     session: AsyncSession,
@@ -154,12 +167,17 @@ async def handle_promocode_input(
 ) -> None:
     input_promocode = message.text.strip()
     logger.info(f"Admin {user.tg_id} entered promocode: {input_promocode} for editing.")
+    
+    data = await state.get_data()
+    main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
+    
+    # Удаляем сообщение пользователя
+    await message.delete()
 
     promocode = await Promocode.get(session=session, code=input_promocode)
     if promocode and not promocode.is_activated:
         await state.set_state(EditPromocodeStates.selecting_duration)
         await state.update_data({INPUT_PROMOCODE_KEY: input_promocode})
-        main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
         await message.bot.edit_message_text(
             text=_("promocode_editor:message:edit_duration").format(
                 promocode=promocode.code,
@@ -178,7 +196,7 @@ async def handle_promocode_input(
 
 
 @router.callback_query(EditPromocodeStates.selecting_duration, IsAdmin())
-async def callback_duration_selected(
+async def callback_duration_selected_edit(
     callback: CallbackQuery,
     user: User,
     session: AsyncSession,
@@ -200,6 +218,5 @@ async def callback_duration_selected(
             duration=format_subscription_period(promocode.duration),
         ),
     )
-
 
 # endregion

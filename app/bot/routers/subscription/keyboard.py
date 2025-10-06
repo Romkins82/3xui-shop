@@ -98,12 +98,11 @@ def server_keyboard(
     callback_data: SubscriptionData,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    previous_state = callback_data.state
-    previous_server_id = callback_data.server_id
+    
+    original_server_id = callback_data.server_id
 
     for server in servers:
         callback_data.server_id = server.id
-        callback_data.state = NavSubscription.SERVER
 
         load = f"{server.current_clients}/{server.max_clients}"
         location = f"{server.location} · " if server.location else ""
@@ -116,8 +115,8 @@ def server_keyboard(
             )
         )
 
-    callback_data.state = previous_state
-    callback_data.server_id = previous_server_id
+    callback_data.server_id = original_server_id
+
     builder.row(back_button(NavSubscription.MAIN))
     builder.row(back_to_main_menu_button())
     return builder.as_markup()
@@ -147,7 +146,7 @@ def duration_keyboard(
     if callback_data.is_extend:
         builder.row(back_button(NavSubscription.MAIN))
     else:
-        callback_data.state = NavSubscription.PROCESS
+        callback_data.state = NavSubscription.DEVICES
         builder.row(
             back_button(
                 callback_data.pack(),

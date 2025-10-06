@@ -124,7 +124,7 @@ class ServerPoolService:
         servers_with_free_slots = [
             conn.server
             for conn in self._servers.values()
-            if conn.server.current_clients < conn.server.max_clients and conn.server.online
+            if conn.server.online
         ]
         if servers_with_free_slots:
             server = sorted(servers_with_free_slots, key=lambda s: s.current_clients)[0]
@@ -152,3 +152,7 @@ class ServerPoolService:
     async def get_all_servers(self) -> list[Server]:
         await self.sync_servers()
         return [conn.server for conn in self._servers.values()]
+    
+    async def get_available_servers(self) -> list[Server]:
+        await self.sync_servers()
+        return [conn.server for conn in self._servers.values() if conn.server.online]
