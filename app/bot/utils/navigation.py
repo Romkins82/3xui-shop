@@ -6,7 +6,7 @@ class NavMain(str, Enum):
     MAIN_MENU = "main_menu"
     CLOSE_NOTIFICATION = "close_notification"
     REDIRECT_TO_DOWNLOAD = "redirect_to_download"
-
+    DISABLE_ADS = "disable_ads"
 
 class NavProfile(str, Enum):
     MAIN = "profile"
@@ -35,9 +35,12 @@ class NavDownload(str, Enum):
 class NavSubscription(str, Enum):
     MAIN = "subscription"
     CHANGE = "change"
+    CHANGE_LOCATION = "change_location"
     EXTEND = "extend"
     PROCESS = "process"
+    SERVER = "server"
     DEVICES = "devices"
+    LOCATION = "location"
     DURATION = "duration"
     PROMOCODE = "promocode"
     GET_TRIAL = "get_trial"
@@ -66,6 +69,8 @@ class NavAdminTools(str, Enum):
     SYNC_SERVERS = "sync_servers"
     STATISTICS = "statistics"
     USER_EDITOR = "user_editor"
+    USER_EDITOR_SHOW = "user_editor_show"
+    USER_EDITOR_EDIT_SUB = "user_editor_edit_sub"
 
     INVITE_EDITOR = "invite_editor"
     CREATE_INVITE = "create_invite"

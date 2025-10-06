@@ -8,5 +8,4 @@ from . import (
     restart_handler,
     server_handler,
     statistics_handler,
-    user_handler,
 )

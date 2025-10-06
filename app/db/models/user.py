@@ -71,6 +71,12 @@ class User(Base):
     )
     source_invite_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    @property
+    def display_name(self) -> str:
+        if self.username:
+            return f"@{self.username}"
+        return self.first_name
+
     def __repr__(self) -> str:
         return (
             f"<User(id={self.id}, tg_id={self.tg_id}, vpn_id='{self.vpn_id}', "
@@ -101,9 +107,39 @@ class User(Base):
         return None
 
     @classmethod
-    async def get_all(cls, session: AsyncSession) -> list[Self]:
-        query = await session.execute(select(User).options(selectinload(User.server)))
-        return query.scalars().all()
+    async def get_all(
+        cls, session: AsyncSession, limit: int = None, offset: int = None
+    ) -> list[Self]:
+        query = select(User).options(selectinload(User.server)).order_by(cls.created_at.desc())
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+        
+        result = await session.execute(query)
+        return result.scalars().all()
+
+    @classmethod
+    async def search_users(
+        cls, session: AsyncSession, query_text: str, limit: int = None, offset: int = None
+    ) -> list[Self]:
+        filter_conditions = []
+        if query_text.isdigit():
+            filter_conditions.append(cls.tg_id == int(query_text))
+        elif query_text.startswith("@"):
+            filter_conditions.append(cls.username.ilike(f"%{query_text[1:]}%"))
+        else:
+            filter_conditions.append(cls.first_name.ilike(f"%{query_text}%"))
+
+        query = select(cls).where(*filter_conditions).order_by(cls.created_at.desc())
+
+        if limit is not None:
+            query = query.limit(limit)
+        if offset is not None:
+            query = query.offset(offset)
+
+        result = await session.execute(query)
+        return result.scalars().all()
 
     @classmethod
     async def create(cls, session: AsyncSession, tg_id: int, **kwargs: Any) -> Self | None:

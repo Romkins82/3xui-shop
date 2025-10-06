@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 import logging
 
 from py3xui import Client, Inbound
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.models import ClientData
 from app.bot.utils.network import extract_base_url
@@ -37,68 +37,51 @@ class VPNService:
 
     async def is_client_exists(self, user: User) -> Client | None:
         connection = await self.server_pool_service.get_connection(user)
-
         if not connection:
             return None
-
         client = await connection.api.client.get_by_email(str(user.tg_id))
-
         if client:
             logger.debug(f"Client {user.tg_id} exists on server {connection.server.name}.")
         else:
             logger.critical(f"Client {user.tg_id} not found on server {connection.server.name}.")
-
         return client
 
     async def get_limit_ip(self, user: User, client: Client) -> int | None:
         connection = await self.server_pool_service.get_connection(user)
-
         if not connection:
             return None
-
         try:
             inbounds: list[Inbound] = await connection.api.inbound.get_list()
         except Exception as exception:
             logger.error(f"Failed to fetch inbounds: {exception}")
             return None
-
         for inbound in inbounds:
             for inbound_client in inbound.settings.clients:
                 if inbound_client.email == client.email:
                     logger.debug(f"Client {client.email} limit ip: {inbound_client.limit_ip}")
                     return inbound_client.limit_ip
-
         logger.critical(f"Client {client.email} not found in inbounds.")
         return None
 
     async def get_client_data(self, user: User) -> ClientData | None:
         logger.debug(f"Starting to retrieve client data for {user.tg_id}.")
-
         connection = await self.server_pool_service.get_connection(user)
-
         if not connection:
             return None
-
         try:
             client = await connection.api.client.get_by_email(str(user.tg_id))
-
             if not client:
-                logger.critical(
-                    f"Client {user.tg_id} not found on server {connection.server.name}."
-                )
+                logger.critical(f"Client {user.tg_id} not found on server {connection.server.name}.")
                 return None
-
             limit_ip = await self.get_limit_ip(user=user, client=client)
             max_devices = -1 if limit_ip == 0 else limit_ip
             traffic_total = client.total
             expiry_time = -1 if client.expiry_time == 0 else client.expiry_time
-
             if traffic_total <= 0:
                 traffic_remaining = -1
                 traffic_total = -1
             else:
                 traffic_remaining = client.total - (client.up + client.down)
-
             traffic_used = client.up + client.down
             client_data = ClientData(
                 max_devices=max_devices,
@@ -118,11 +101,9 @@ class VPNService:
     async def get_key(self, user: User) -> str | None:
         async with self.session() as session:
             user = await User.get(session=session, tg_id=user.tg_id)
-
         if not user.server_id:
             logger.debug(f"Server ID for user {user.tg_id} not found.")
             return None
-
         subscription = extract_base_url(
             url=user.server.host,
             port=self.config.xui.SUBSCRIPTION_PORT,
@@ -137,19 +118,17 @@ class VPNService:
         user: User,
         devices: int,
         duration: int,
+		server_id: int | None = None,
         enable: bool = True,
         flow: str = "xtls-rprx-vision",
         total_gb: int = 0,
         inbound_id: int = 1,
     ) -> bool:
         logger.info(f"Creating new client {user.tg_id} | {devices} devices {duration} days.")
-
         await self.server_pool_service.assign_server_to_user(user)
         connection = await self.server_pool_service.get_connection(user)
-
         if not connection:
             return False
-
         new_client = Client(
             email=str(user.tg_id),
             enable=enable,
@@ -161,7 +140,6 @@ class VPNService:
             total_gb=total_gb,
         )
         inbound_id = await self.server_pool_service.get_inbound_id(connection.api)
-
         try:
             await connection.api.client.add(inbound_id=inbound_id, clients=[new_client])
             logger.info(f"Successfully created client for {user.tg_id}")
@@ -183,30 +161,22 @@ class VPNService:
     ) -> bool:
         logger.info(f"Updating client {user.tg_id} | {devices} devices {duration} days.")
         connection = await self.server_pool_service.get_connection(user)
-
         if not connection:
             return False
-
         try:
             client = await connection.api.client.get_by_email(str(user.tg_id))
-
             if client is None:
                 logger.critical(f"Client {user.tg_id} not found for update.")
                 return False
-
             if not replace_devices:
                 current_device_limit = await self.get_limit_ip(user=user, client=client)
                 devices = current_device_limit + devices
-
             current_time = get_current_timestamp()
-
             if not replace_duration:
                 expiry_time_to_use = max(client.expiry_time, current_time)
             else:
                 expiry_time_to_use = current_time
-
             expiry_time = add_days_to_timestamp(timestamp=expiry_time_to_use, days=duration)
-
             client.enable = enable
             client.id = user.vpn_id
             client.expiry_time = expiry_time
@@ -214,7 +184,6 @@ class VPNService:
             client.limit_ip = devices
             client.sub_id = user.vpn_id
             client.total_gb = total_gb
-
             await connection.api.client.update(client_uuid=client.id, client=client)
             logger.info(f"Client {user.tg_id} updated successfully.")
             return True
@@ -257,35 +226,86 @@ class VPNService:
             if created:
                 logger.info(f"Created client {user.tg_id} with additional {duration} days(-s)")
                 return True
-
         return False
 
     async def activate_promocode(self, user: User, promocode: Promocode) -> bool:
-        # TODO: consider moving to some 'promocode module services' with usage of vpn-service methods.
-
         async with self.session() as session:
             activated = await Promocode.set_activated(
                 session=session,
                 code=promocode.code,
                 user_id=user.tg_id,
             )
-
         if not activated:
             logger.critical(f"Failed to activate promocode {promocode.code} for user {user.tg_id}.")
             return False
-
         logger.info(f"Begun applying promocode ({promocode.code}) to a client {user.tg_id}.")
         success = await self.process_bonus_days(
             user,
             duration=promocode.duration,
             devices=self.config.shop.BONUS_DEVICES_COUNT,
         )
-
         if success:
             return True
-
         async with self.session() as session:
             await Promocode.set_deactivated(session=session, code=promocode.code)
-
         logger.warning(f"Promocode {promocode.code} not activated due to failure.")
         return False
+
+    # --- НОВЫЕ МЕТОДЫ С ПРАВИЛЬНЫМИ ОТСТУПАМИ ---
+    async def enable_client(self, user: User) -> bool:
+        client = await self.is_client_exists(user)
+        if not client: return False
+        return await self.update_client(user, devices=client.limit_ip, duration=0, replace_devices=True, replace_duration=False, enable=True)
+
+    async def disable_client(self, user: User) -> bool:
+        client = await self.is_client_exists(user)
+        if not client: return False
+        return await self.update_client(user, devices=client.limit_ip, duration=0, replace_devices=True, replace_duration=False, enable=False)
+
+    async def delete_client(self, user: User) -> bool:
+        logger.info(f"Deleting client {user.tg_id}")
+        connection = await self.server_pool_service.get_connection(user)
+        if not connection:
+            return False
+        
+        try:
+            client = await connection.api.client.get_by_email(str(user.tg_id))
+            if not client:
+                logger.warning(f"Client {user.tg_id} not found on server for deletion.")
+                return True
+            
+            await connection.api.client.delete(client_uuid=client.id)
+            logger.info(f"Successfully deleted client {user.tg_id} from server {connection.server.name}")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting client {user.tg_id}: {e}")
+            return False
+
+    async def change_client_location(self, user: User, new_location_name: str, current_devices: int, session: AsyncSession) -> bool:
+        logger.info(f"Changing location for user {user.tg_id} to {new_location_name}")
+        client_data = await self.get_client_data(user)
+        if not client_data:
+            logger.error(f"Failed to get current client data for {user.tg_id}")
+            return False
+
+        if not await self.delete_client(user):
+            logger.error(f"Failed to delete client from old server for user {user.tg_id}")
+            return False
+
+        new_server = await self.server_pool_service.get_available_server_by_location(new_location_name)
+        if not new_server:
+            logger.error(f"No available servers found in location {new_location_name}")
+            return False
+        
+        user.server_id = new_server.id
+        await User.update(session=session, tg_id=user.tg_id, server_id=new_server.id)
+        
+        remaining_days = 0
+        if not client_data.has_subscription_expired and client_data._expiry_time != -1:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            expiry_dt = datetime.fromtimestamp(client_data._expiry_time / 1000, timezone.utc)
+            remaining_days = (expiry_dt - now).days
+            if remaining_days < 0: remaining_days = 0
+        
+        return await self.create_client(user=user, devices=current_devices, duration=remaining_days)

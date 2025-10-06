@@ -1,5 +1,5 @@
 import logging
-
+import asyncio
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
