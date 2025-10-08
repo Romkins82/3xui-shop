@@ -14,18 +14,28 @@ from app.config import Config
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
 
-
 @router.errors(ExceptionTypeFilter(Exception))
 async def errors_handler(event: ErrorEvent, config: Config, services: ServicesContainer) -> bool:
     if isinstance(event.exception, TelegramForbiddenError):
-        logger.info(f"User {event.update.message.from_user.id} blocked the bot.")
+        # Эта часть в порядке, оставляем как есть
+        # Предполагаем, что блокировка происходит после отправки сообщения
+        if event.update.message and event.update.message.from_user:
+            logger.info(f"User {event.update.message.from_user.id} blocked the bot.")
         return True
 
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
     if isinstance(event.exception, TelegramBadRequest):
-        logger.warning(
-            f"User {event.update.callback_query.from_user.id} bad request for edit/send message."
-        )
+        user_id = "Unknown"
+        # Пытаемся получить ID пользователя сначала из callback_query
+        if event.update.callback_query and event.update.callback_query.from_user:
+            user_id = event.update.callback_query.from_user.id
+        # Если не получилось, пытаемся получить из message
+        elif event.update.message and event.update.message.from_user:
+            user_id = event.update.message.from_user.id
+        
+        logger.warning(f"User {user_id} caused a bad request for edit/send message.")
         return True
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     logger.exception(f"Update: {event.update}\nException: {event.exception}")
 
