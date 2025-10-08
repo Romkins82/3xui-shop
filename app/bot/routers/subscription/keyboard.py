@@ -96,21 +96,26 @@ def devices_keyboard(
 def server_keyboard(
     servers: list["Server"],
     callback_data: SubscriptionData,
+    is_admin: bool = False,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    
+
     original_server_id = callback_data.server_id
 
     for server in servers:
         callback_data.server_id = server.id
-
-        load = f"{server.current_clients}/{server.max_clients}"
-        location = f"{server.location} · " if server.location else ""
-        status = "🟢" if server.current_clients < server.max_clients else "⚠️"
+        
+        if is_admin:
+            load = f"{server.current_clients}/{server.max_clients}"
+            location = f"{server.location} · " if server.location else ""
+            status = "🟢" if server.current_clients < server.max_clients else "⚠️"
+            text = f"{status} {server.name} | {location}{load}"
+        else:
+            text = f"{server.name}"
 
         builder.row(
             InlineKeyboardButton(
-                text=f"{status} {server.name} | {location}{load}",
+                text=text,
                 callback_data=callback_data.pack(),
             )
         )

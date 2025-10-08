@@ -124,16 +124,12 @@ class ServerPoolService:
         servers_with_free_slots = [
             conn.server
             for conn in self._servers.values()
-            if conn.server.online
+            if conn.server.online and conn.server.current_clients < conn.server.max_clients
         ]
         if servers_with_free_slots:
             server = sorted(servers_with_free_slots, key=lambda s: s.current_clients)[0]
             return server
-        servers_least_loaded = [conn.server for conn in self._servers.values() if conn.server.online]
-        if servers_least_loaded:
-            server = sorted(servers_least_loaded, key=lambda s: s.current_clients)[0]
-            return server
-        logger.critical("No available servers found in pool")
+        logger.critical("No available servers with free slots found in pool")
         return None
 
     async def get_available_server_by_location(self, location_name: str) -> Server | None:
@@ -146,8 +142,9 @@ class ServerPoolService:
             server = sorted(servers_with_free_slots, key=lambda s: s.current_clients)[0]
             return server
 
-        server = sorted(servers_in_location, key=lambda s: s.current_clients)[0]
-        return server
+        logger.warning(f"No available servers with free slots found in location {location_name}")
+        return None
+
 
     async def get_all_servers(self) -> list[Server]:
         await self.sync_servers()
@@ -155,4 +152,8 @@ class ServerPoolService:
     
     async def get_available_servers(self) -> list[Server]:
         await self.sync_servers()
-        return [conn.server for conn in self._servers.values() if conn.server.online]
+        return [
+            conn.server
+            for conn in self._servers.values()
+            if conn.server.online and conn.server.current_clients < conn.server.max_clients
+        ]

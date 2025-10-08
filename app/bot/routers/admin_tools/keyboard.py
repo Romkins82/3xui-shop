@@ -191,7 +191,11 @@ def server_keyboard(server_name: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(
             text=_("server_management:button:ping"),
             callback_data=NavAdminTools.PING_SERVER + f"_{server_name}",
-        )
+        ),
+        InlineKeyboardButton(
+            text="✏️ Изменить",
+            callback_data=NavAdminTools.EDIT_SERVER + f"_{server_name}",
+        ),
     )
     builder.row(
         InlineKeyboardButton(
@@ -202,6 +206,30 @@ def server_keyboard(server_name: str) -> InlineKeyboardMarkup:
 
     builder.adjust(2)
     builder.row(back_button(NavAdminTools.SERVER_MANAGEMENT))
+    return builder.as_markup()
+
+
+def edit_server_keyboard(server_name: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text="Изменить название",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_NAME}_{server_name}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Изменить хост",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_HOST}_{server_name}",
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Изменить макс. клиентов",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_MAX_CLIENTS}_{server_name}",
+        )
+    )
+    builder.row(back_button(f"{NavAdminTools.SHOW_SERVER}_{server_name}"))
     return builder.as_markup()
 
 

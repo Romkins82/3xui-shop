@@ -36,17 +36,27 @@ async def redirect_to_connection(request: Request) -> Response:
     key = params.get("key")
 
     if not scheme or not key:
-        raise Response(status=400, reason="Invalid parameters.")
+        return Response(status=400, reason="Invalid parameters.")
 
-    redirect_url = f"{scheme}{key}"  # TODO: #namevpn
-    if scheme in {
-        APP_IOS_SCHEME,
-        APP_ANDROID_SCHEME,
-        APP_WINDOWS_SCHEME,
-    }:
-        raise HTTPFound(redirect_url)
+    redirect_url = f"{scheme}{key}"
 
-    return Response(status=400, reason="Unsupported application.")
+    # Вместо HTTPFound возвращаем HTML с JavaScript для редиректа
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Redirecting...</title>
+        <meta charset="UTF-8">
+        <script type="text/javascript">
+            window.location.href = "{redirect_url}";
+        </script>
+    </head>
+    <body>
+        <p>If you are not redirected automatically, <a href="{redirect_url}">click here</a>.</p>
+    </body>
+    </html>
+    """
+    return Response(body=html_content, content_type="text/html")
 
 
 @router.callback_query(F.data == NavDownload.MAIN)

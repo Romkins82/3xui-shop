@@ -58,12 +58,12 @@ class VPNService:
                             if client:
                                 logger.debug(f"Client {user.tg_id} found in inbound {inbound.id}")
                                 return client
-                        except ValueError:
+                        except Exception:  # Broadened exception to catch any error during iteration
                             continue # Not in this inbound
                 except Exception as e_inbound:
                     logger.error(f"Error while searching client in inbounds: {e_inbound}", exc_info=True)
             else:
-                logger.warning(f"Could not check if client exists for user {user.tg_id}: {e}")
+                logger.warning(f"Could not check if client exists for user {user.tg_id} due to unexpected error: {e}")
         
         logger.warning(f"Client {user.tg_id} not found on server {connection.server.name}.")
         return None
@@ -78,10 +78,11 @@ class VPNService:
             logger.error(f"Failed to fetch inbounds: {exception}")
             return None
         for inbound in inbounds:
-            for inbound_client in inbound.settings.clients:
-                if inbound_client.email == client.email:
-                    logger.debug(f"Client {client.email} limit ip: {inbound_client.limit_ip}")
-                    return inbound_client.limit_ip
+            if hasattr(inbound.settings, 'clients'):
+                for inbound_client in inbound.settings.clients:
+                    if inbound_client.email == client.email:
+                        logger.debug(f"Client {client.email} limit ip: {inbound_client.limit_ip}")
+                        return inbound_client.limit_ip
         logger.critical(f"Client {client.email} not found in inbounds.")
         return None
 
@@ -152,20 +153,28 @@ class VPNService:
 
         logger.info(f"Creating new client for user {user.tg_id} | {devices} devices, {duration} days.")
 
-        if not user.server_id:
-            assigned_server = None
-            if server_id:
-                async with self.session() as temp_session:
-                    assigned_server = await Server.get_by_id(temp_session, server_id)
-            elif location_name:
-                assigned_server = await self.server_pool_service.get_available_server_by_location(location_name)
-            else:
-                 assigned_server = await self.server_pool_service.get_available_server()
-            
-            if not assigned_server:
-                logger.error(f"No available server found to create client for user {user.tg_id}.")
-                return None
-            user.server_id = assigned_server.id
+        assigned_server = None
+        if server_id:
+            async with self.session() as temp_session:
+                server = await Server.get_by_id(temp_session, server_id)
+                # Повторная проверка прямо перед созданием клиента
+                if server and server.online and server.current_clients < server.max_clients:
+                    assigned_server = server
+                else:
+                    logger.warning(
+                        f"Server {server_id} is full or offline at the time of client creation for user {user.tg_id}. Trying to find a fallback."
+                    )
+                    # В качестве запасного варианта, ищем любой другой доступный сервер
+                    assigned_server = await self.server_pool_service.get_available_server()
+        elif location_name:
+            assigned_server = await self.server_pool_service.get_available_server_by_location(location_name)
+        else:
+             assigned_server = await self.server_pool_service.get_available_server()
+
+        if not assigned_server:
+            logger.error(f"No available server found to create client for user {user.tg_id}.")
+            return None
+        user.server_id = assigned_server.id
 
         connection = await self.server_pool_service.get_connection(user)
         if not connection:

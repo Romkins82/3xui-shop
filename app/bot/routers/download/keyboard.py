@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.i18n import gettext as _
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -55,8 +57,10 @@ def download_keyboard(platform: NavDownload, url: str, key: str) -> InlineKeyboa
         case _:
             scheme = APP_WINDOWS_SCHEME
             download = APP_WINDOWS_LINK
-
-    connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={key}"
+    
+    # Кодируем ключ перед вставкой в URL
+    encoded_key = quote(key, safe='')
+    connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={encoded_key}"
 
     builder.button(text=_("download:button:download"), url=download)
 
