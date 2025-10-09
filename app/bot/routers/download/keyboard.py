@@ -58,15 +58,17 @@ def download_keyboard(platform: NavDownload, url: str, key: str) -> InlineKeyboa
             scheme = APP_WINDOWS_SCHEME
             download = APP_WINDOWS_LINK
     
-    # Кодируем ключ перед вставкой в URL
-    encoded_key = quote(key, safe='')
-    connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={encoded_key}"
+    # ИСПРАВЛЕНИЕ: Добавляем проверку, что ключ существует, перед кодированием
+    connect = None
+    if key:
+        encoded_key = quote(key, safe='')
+        connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={encoded_key}"
 
     builder.button(text=_("download:button:download"), url=download)
 
     builder.button(
         text=_("download:button:connect"),
-        url=connect if key else None,
+        url=connect, # Используем 'connect' который будет None, если ключа нет
         callback_data=NavSubscription.MAIN if not key else None,
     )
 

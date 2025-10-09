@@ -322,59 +322,69 @@ async def handle_edit_subscription_entry(
     )
     await callback.answer()
 
-# Handler for "Включить/Отключить подписку" button
 @router.callback_query(AdminEditUserAction.filter(F.action == "toggle_sub_status"), StateFilter(AdminEditUserStates.waiting_for_edit_subscription_action))
 async def handle_toggle_client_status(
     callback: types.CallbackQuery,
     state: FSMContext,
     callback_data: AdminEditUserAction,
     vpn: VPNService,
+    services: ServicesContainer,
     session_maker: async_sessionmaker
 ):
-    await callback.answer() # Acknowledge immediately
     target_user_id = callback_data.target_user_id
     enable_action = callback_data.new_status == 1
 
+    await callback.message.edit_text(_("user_editor:info:verifying_status").format(user_id=target_user_id))
+
     async with session_maker() as session:
         user = await User.get(session, tg_id=target_user_id)
-    
+
     if not user:
-        await callback.message.edit_text(_("user_editor:error:user_not_found_in_db").format(user_id=target_user_id))
+        await callback.answer(_("user_editor:error:user_not_found_in_db").format(user_id=target_user_id), show_alert=True)
         return
 
-    # First attempt to toggle the status
     success = False
     if enable_action:
-        success = await vpn.enable_client(user)
+        client = await vpn.is_client_exists(user)
+        if client:
+            success = await vpn.enable_client(user)
+        else:
+            try:
+                default_plan = services.plan.get_all_plans()[0]
+                default_duration = services.plan.get_durations()[0]
+                created_user = await vpn.create_client(
+                    user=user,
+                    devices=default_plan.devices,
+                    duration=default_duration
+                )
+                success = created_user is not None
+            except IndexError:
+                logger.error("Could not create default subscription: no plans or durations configured.")
+                success = False
     else:
         success = await vpn.disable_client(user)
-    
+
+    # Получаем актуальное состояние после операции
+    client = await vpn.is_client_exists(user)
+    actual_state = client.enable if client else False
+    action_text = _("status:enabled") if actual_state else _("status:disabled")
+
     if success:
-        # After successful toggle, verify the actual client state
-        await callback.message.edit_text(_("user_editor:info:verifying_status").format(user_id=target_user_id))
-        
-        # Give X-UI a moment to update the state
-        import asyncio
-        await asyncio.sleep(2)  # Increased delay to ensure X-UI updates
-        
-        # Get the real client state after toggle
-        client = await vpn.is_client_exists(user)
-        actual_state = False
-        if client:
-            actual_state = client.enable
-            logger.info(f"Client {target_user_id} enable state from X-UI after toggle: {actual_state}")
-            
-        # Use the actual verified state for the UI update
-        action_text = _("status:enabled") if actual_state else _("status:disabled")
-        await callback.message.edit_text(
+        await callback.answer(
             _("user_editor:success:subscription_status_changed").format(user_id=target_user_id, status=action_text),
-            reply_markup=edit_subscription_keyboard(target_user_id=target_user_id, is_enabled=actual_state)
+            show_alert=True
         )
     else:
-        await callback.message.edit_text(
+        await callback.answer(
             _("user_editor:error:subscription_status_change_failed").format(user_id=target_user_id),
-            reply_markup=callback.message.reply_markup # Keep old keyboard
+            show_alert=True
         )
+
+    # Обновляем клавиатуру в исходном сообщении
+    await callback.message.edit_text(
+        _("user_editor:prompt:edit_subscription_menu").format(user_id=target_user_id), 
+        reply_markup=edit_subscription_keyboard(target_user_id=target_user_id, is_enabled=actual_state)
+    )
 
 # Handler for "Back to user actions" (from edit_subscription_keyboard, delete_options_keyboard, location_selection_keyboard_for_admin)
 @router.callback_query(
@@ -411,22 +421,27 @@ async def handle_new_device_count_input(
     services: ServicesContainer
 ):
     if not message.text.isdigit() or int(message.text) < 0:
-        await message.answer(_("user_editor:error:invalid_device_count"))
+        await services.notification.notify_by_message(message, _("user_editor:error:invalid_device_count"), duration=5)
         return
 
     new_device_count = int(message.text)
     data = await state.get_data()
     target_user_id = data.get("target_user_id")
+    main_message_id = data.get(MAIN_MESSAGE_ID_KEY) # Получаем ID главного сообщения
 
-    if not target_user_id:
-        await message.answer(_("user_editor:error:state_lost_user_id_generic"))
+    # Удаляем сообщение пользователя с новым количеством
+    await message.delete()
+
+    if not target_user_id or not main_message_id:
+        # Отправляем временное сообщение об ошибке, если что-то пошло не так
+        await services.notification.notify_by_message(message, _("user_editor:error:state_lost_user_id_generic"), duration=5)
         await state.clear()
         return
 
     async with session_maker() as session:
         db_user = await User.get(session, tg_id=target_user_id)
         if not db_user:
-            await message.answer(_("user_editor:error:user_not_found_in_db").format(user_id=target_user_id))
+            await services.notification.notify_by_message(message, _("user_editor:error:user_not_found_in_db").format(user_id=target_user_id), duration=5)
             return
 
     success = await services.vpn.update_client(
@@ -435,15 +450,20 @@ async def handle_new_device_count_input(
         replace_devices=True
     )
 
-    if success:
-        await message.answer(_("user_editor:success:device_count_updated").format(user_id=target_user_id, count=new_device_count))
-    else:
-        await message.answer(_("user_editor:error:device_count_update_failed").format(user_id=target_user_id))
-    
-    # Go back to the user actions menu
-    await state.set_state(AdminEditUserStates.user_selected)
-    reply_markup = user_edit_actions_keyboard(target_user_id=target_user_id) # type: ignore
-    await message.answer(_("user_editor:prompt:user_selected").format(user_id=target_user_id), reply_markup=reply_markup)
+    # Показываем результат во всплывающем уведомлении
+    notification_text = _("user_editor:success:device_count_updated").format(user_id=target_user_id, count=new_device_count) if success else _("user_editor:error:device_count_update_failed").format(user_id=target_user_id)
+    await services.notification.notify_by_message(message, notification_text, duration=5)
+
+    # Возвращаемся в меню редактирования подписки, редактируя основное сообщение
+    client = await services.vpn.is_client_exists(db_user)
+    is_enabled = client.enable if client else False
+    await state.set_state(AdminEditUserStates.waiting_for_edit_subscription_action)
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=main_message_id,
+        text=_("user_editor:prompt:edit_subscription_menu").format(user_id=target_user_id),
+        reply_markup=edit_subscription_keyboard(target_user_id=target_user_id, is_enabled=is_enabled)
+    )
 
 # Handler for "📍 Сменить локацию" button (prompt)
 @router.callback_query(AdminEditUserAction.filter(F.action == "change_loc_prompt"), StateFilter(AdminEditUserStates.user_selected))
@@ -571,26 +591,29 @@ async def handle_new_duration_days_input(
     services: ServicesContainer
 ):
     try:
-        days = int(message.text)
-        if days < 0:
+        days_to_add = int(message.text)
+        if days_to_add < 0:
             raise ValueError
     except (ValueError, TypeError):
-        await message.answer(_("admin_tools:user_editor:invalid_days_positive"))
+        await services.notification.notify_by_message(message, _("admin_tools:user_editor:invalid_days_positive"), duration=5)
         return
 
-    days_to_add = int(message.text)
     data = await state.get_data()
     target_user_id = data.get("target_user_id")
+    main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
 
-    if not target_user_id:
-        await message.answer(_("user_editor:error:state_lost_user_id_generic"))
+    # Удаляем сообщение пользователя с количеством дней
+    await message.delete()
+
+    if not target_user_id or not main_message_id:
+        await services.notification.notify_by_message(message, _("user_editor:error:state_lost_user_id_generic"), duration=5)
         await state.clear()
         return
 
     async with session_maker() as session:
         db_user = await User.get(session, tg_id=target_user_id)
         if not db_user:
-            await message.answer(_("user_editor:error:user_not_found_in_db").format(user_id=target_user_id))
+            await services.notification.notify_by_message(message, _("user_editor:error:user_not_found_in_db").format(user_id=target_user_id), duration=5)
             return
 
     success = await services.vpn.update_client(
@@ -599,18 +622,23 @@ async def handle_new_duration_days_input(
         replace_duration=False
     )
 
+    # Формируем и показываем текст результата во всплывающем окне
     if success:
-        if days_to_add == 0:
-            await message.answer(_("user_editor:success:duration_set_unlimited").format(user_id=target_user_id))
-        else:
-            await message.answer(_("user_editor:success:duration_updated").format(user_id=target_user_id, days=days_to_add))
+        notification_text = _("user_editor:success:duration_set_unlimited").format(user_id=target_user_id) if days_to_add == 0 else _("user_editor:success:duration_updated").format(user_id=target_user_id, days=days_to_add)
     else:
-        await message.answer(_("user_editor:error:duration_update_failed").format(user_id=target_user_id))
-    
-    # Go back to the user actions menu
-    await state.set_state(AdminEditUserStates.user_selected)
-    reply_markup = user_edit_actions_keyboard(target_user_id=target_user_id) # type: ignore
-    await message.answer(_("user_editor:prompt:user_selected").format(user_id=target_user_id), reply_markup=reply_markup)
+        notification_text = _("user_editor:error:duration_update_failed").format(user_id=target_user_id)
+    await services.notification.notify_by_message(message, notification_text, duration=5)
+
+    # Возвращаемся в меню редактирования подписки
+    client = await services.vpn.is_client_exists(db_user)
+    is_enabled = client.enable if client else False
+    await state.set_state(AdminEditUserStates.waiting_for_edit_subscription_action)
+    await message.bot.edit_message_text(
+        chat_id=message.chat.id,
+        message_id=main_message_id,
+        text=_("user_editor:prompt:edit_subscription_menu").format(user_id=target_user_id),
+        reply_markup=edit_subscription_keyboard(target_user_id=target_user_id, is_enabled=is_enabled)
+    )
 
 # Handler for "Delete User" button.
 @router.callback_query(

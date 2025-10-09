@@ -42,6 +42,7 @@ class AddServerStates(StatesGroup):
     name = State()
     host = State()
     max_clients = State()
+    location = State()
     confirmation = State()
 
 
@@ -50,6 +51,7 @@ class EditServerStates(StatesGroup):
     name = State()
     host = State()
     max_clients = State()
+    location = State()
 
 
 # region Main and Sync
@@ -99,11 +101,6 @@ async def callback_sync_servers(
         text=_("server_management:popup:synced"),
     )
 
-
-# endregion
-
-
-# region Add Server Flow
 async def show_add_server(message: Message, state: FSMContext) -> None:
     current_state = await state.get_state()
     data = await state.get_data()
@@ -115,6 +112,11 @@ async def show_add_server(message: Message, state: FSMContext) -> None:
     max_clients = _("server_management:message:max_clients").format(
         server_max_clients=data.get(SERVER_MAX_CLIENTS_KEY, "")
     )
+
+    location = _("server_management:message:location").format(
+        server_location=data.get(SERVER_LOCATION_KEY, "")
+    )
+
     reply_markup = back_keyboard(NavAdminTools.ADD_SERVER_BACK)
 
     match current_state:
@@ -127,8 +129,13 @@ async def show_add_server(message: Message, state: FSMContext) -> None:
         case AddServerStates.max_clients:
             text += name + host
             text += _("server_management:message:enter_max_clients")
-        case AddServerStates.confirmation:
+
+        case AddServerStates.location:
             text += name + host + max_clients
+            text += _("server_management:message:enter_location")
+
+        case AddServerStates.confirmation:
+            text += name + host + max_clients + location
             text += _("server_management:message:confirm")
             reply_markup = confirm_add_server_keyboard()
 
@@ -139,7 +146,6 @@ async def show_add_server(message: Message, state: FSMContext) -> None:
         reply_markup=reply_markup,
     )
 
-
 @router.callback_query(StateFilter(AddServerStates), F.data == NavAdminTools.ADD_SERVER_BACK, IsDev())
 async def callback_add_server_back(callback: CallbackQuery, state: FSMContext) -> None:
     current_state = await state.get_state()
@@ -147,8 +153,10 @@ async def callback_add_server_back(callback: CallbackQuery, state: FSMContext) -
         await state.set_state(AddServerStates.name)
     elif current_state == AddServerStates.max_clients:
         await state.set_state(AddServerStates.host)
-    elif current_state == AddServerStates.confirmation:
+    elif current_state == AddServerStates.location:
         await state.set_state(AddServerStates.max_clients)
+    elif current_state == AddServerStates.confirmation:
+        await state.set_state(AddServerStates.location)
     await show_add_server(message=callback.message, state=state)
 
 
@@ -187,11 +195,21 @@ async def message_add_max_clients(message: Message, state: FSMContext, services:
     if not is_valid_client_count(server_max_clients):
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_max_clients"), duration=5)
         return
-    await state.set_state(AddServerStates.confirmation)
+    await state.set_state(AddServerStates.location)
     await state.update_data({SERVER_MAX_CLIENTS_KEY: int(server_max_clients)})
     await show_add_server(message=message, state=state)
 
-
+@router.message(AddServerStates.location, IsDev())
+async def message_add_location(message: Message, state: FSMContext, services: ServicesContainer) -> None:
+    server_location = message.text.strip()
+    # Простая проверка, что поле не пустое
+    if not server_location:
+        await services.notification.notify_by_message(message, "❌ Локация не может быть пустой.", duration=5)
+        return
+    await state.set_state(AddServerStates.confirmation)
+    await state.update_data({SERVER_LOCATION_KEY: server_location})
+    await show_add_server(message=message, state=state)
+	
 @router.callback_query(AddServerStates.confirmation, F.data == NavAdminTools.СONFIRM_ADD_SERVER, IsDev())
 async def callback_add_confirmation(callback: CallbackQuery, user: User, session: AsyncSession, state: FSMContext, services: ServicesContainer) -> None:
     data = await state.get_data()
@@ -200,6 +218,7 @@ async def callback_add_confirmation(callback: CallbackQuery, user: User, session
         name=data.get(SERVER_NAME_KEY),
         host=data.get(SERVER_HOST_KEY),
         max_clients=data.get(SERVER_MAX_CLIENTS_KEY),
+        location=data.get(SERVER_LOCATION_KEY),
     )
     if server:
         await services.server_pool.sync_servers()
@@ -207,10 +226,7 @@ async def callback_add_confirmation(callback: CallbackQuery, user: User, session
         await services.notification.show_popup(callback, _("server_management:popup:added_success"))
     else:
         await services.notification.show_popup(callback, _("server_management:popup:add_failed"))
-# endregion
 
-
-# region Server View and Edit Flow
 async def _show_server_view(
     bot: "Bot", chat_id: int, message_id: int, session: AsyncSession, server_id: int, state: FSMContext
 ):
@@ -234,6 +250,9 @@ async def _show_server_view(
         clients=server.current_clients,
         max_clients=server.max_clients,
     )
+    if server.location:
+        text += f"\n<b>Локация:</b> {server.location}"
+        
     await bot.edit_message_text(
         text=text,
         chat_id=chat_id,
@@ -311,7 +330,15 @@ async def callback_edit_max_clients_prompt(callback: CallbackQuery, state: FSMCo
         "Введите новое максимальное количество клиентов:",
         reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_id}"),
     )
-
+	
+@router.callback_query(F.data.startswith(f"{NavAdminTools.EDIT_SERVER_LOCATION}:"), EditServerStates.menu, IsDev())
+async def callback_edit_location_prompt(callback: CallbackQuery, state: FSMContext):
+    server_id = int(callback.data.split(":")[1])
+    await state.set_state(EditServerStates.location)
+    await callback.message.edit_text(
+        "Введите новую локацию сервера:",
+        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_id}"),
+    )
 
 # --- Message handlers for receiving new data ---
 @router.message(EditServerStates.name, IsDev())
@@ -339,6 +366,14 @@ async def message_edit_max_clients(message: Message, state: FSMContext, session:
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_max_clients"), duration=5)
         return
     await handle_server_edit(message, state, session, services, "max_clients", int(new_max_clients))
+
+@router.message(EditServerStates.location, IsDev())
+async def message_edit_location(message: Message, state: FSMContext, session: AsyncSession, services: ServicesContainer):
+    new_location = message.text.strip()
+    if not new_location:
+        await services.notification.notify_by_message(message, "❌ Локация не может быть пустой.", duration=5)
+        return
+    await handle_server_edit(message, state, session, services, "location", new_location)
 
 
 async def handle_server_edit(message: Message, state: FSMContext, session: AsyncSession, services: ServicesContainer, field_to_update: str, new_value: Any):

@@ -20,6 +20,7 @@ INPUT_PROMOCODE_KEY = "input_promocode"
 SERVER_NAME_KEY = "server_name"
 SERVER_HOST_KEY = "server_host"
 SERVER_MAX_CLIENTS_KEY = "server_max_clients"
+SERVER_LOCATION_KEY = "server_location"
 
 NOTIFICATION_CHAT_IDS_KEY = "notification_chat_ids"
 NOTIFICATION_LAST_MESSAGE_IDS_KEY = "notification_last_message_ids"

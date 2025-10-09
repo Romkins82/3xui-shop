@@ -111,7 +111,8 @@ def server_keyboard(
             status = "🟢" if server.current_clients < server.max_clients else "⚠️"
             text = f"{status} {server.name} | {location}{load}"
         else:
-            text = f"{server.name}"
+            
+            text = f"{server.location} | {server.name}" if server.location else server.name
 
         builder.row(
             InlineKeyboardButton(

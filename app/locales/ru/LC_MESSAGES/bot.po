@@ -599,6 +599,16 @@ msgstr "- host: {server_host}\n"
 msgid "server_management:message:max_clients"
 msgstr "- max clients: {server_max_clients}\n"
 
+msgid "server_management:message:location"
+msgstr "- location: {server_location}\n"
+
+msgid "server_management:message:enter_location"
+msgstr "<i>Введите локацию сервера (например: Netherlands.)</i>"
+# <--
+
+msgid "server_management:message:confirm"
+msgstr "<i>Нажмите подтвердить для добавления сервера</i>"
+
 #: app/bot/routers/admin_tools/server_handler.py:99
 msgid "server_management:message:enter_name"
 msgstr "<i>Введите имя сервера</i>"
@@ -1761,6 +1771,12 @@ msgstr "Ошибка: выбрана неверная локация. Пожал
 
 msgid "user_editor:error:xui_data_fetch_failed_for_loc_change"
 msgstr "Не удалось получить текущие данные клиента {user_id} из X-UI для смены локации. Операция отменена."
+
+msgid "edit_server:button:change_location"
+msgstr "Изменить локацию"
+
+msgid "edit_server:prompt:enter_location"
+msgstr "Введите новую локацию сервера:"
 
 msgid "user_editor:error:could_not_determine_devices_for_loc_change"
 msgstr "Не удалось определить текущее количество устройств для пользователя {user_id}. Смена локации отменена."

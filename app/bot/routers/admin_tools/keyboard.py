@@ -228,6 +228,12 @@ def edit_server_keyboard(server_id: int) -> InlineKeyboardMarkup:
             callback_data=f"{NavAdminTools.EDIT_SERVER_MAX_CLIENTS}:{server_id}",
         )
     )
+    builder.row(
+        InlineKeyboardButton(
+            text="Изменить локацию",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_LOCATION}:{server_id}",
+        )
+    )
     builder.row(back_button(f"{NavAdminTools.SHOW_SERVER}:{server_id}"))
     return builder.as_markup()
 

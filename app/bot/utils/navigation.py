@@ -71,6 +71,7 @@ class NavAdminTools(str, Enum):
     EDIT_SERVER_NAME = "edit_server_name"
     EDIT_SERVER_HOST = "edit_server_host"
     EDIT_SERVER_MAX_CLIENTS = "edit_server_max_clients"
+    EDIT_SERVER_LOCATION = "edit_server_location"
     SYNC_SERVERS = "sync_servers"
     STATISTICS = "statistics"
     USER_EDITOR = "user_editor"
