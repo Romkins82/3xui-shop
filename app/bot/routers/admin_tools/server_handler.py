@@ -2,6 +2,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from aiogram import F, Router, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -60,15 +61,23 @@ async def callback_server_management(
     state: FSMContext,
 ) -> None:
     logger.info(f"Dev {user.tg_id} opened servers management.")
-    await state.clear()
-    await state.update_data({MAIN_MESSAGE_ID_KEY: callback.message.message_id})
-    text = _("server_management:message:main")
-    servers = await Server.get_all(session)
+    try:
+        await state.clear()
+        await state.update_data({MAIN_MESSAGE_ID_KEY: callback.message.message_id})
+        text = _("server_management:message:main")
+        servers = await Server.get_all(session)
 
-    if not servers:
-        text += _("server_management:message:empty")
+        if not servers:
+            text += _("server_management:message:empty")
 
-    await callback.message.edit_text(text=text, reply_markup=servers_keyboard(servers))
+        await callback.message.edit_text(text=text, reply_markup=servers_keyboard(servers))
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e).lower():
+            logger.debug("Message not modified, but answering callback to remove loading state.")
+        else:
+            logger.error(f"TelegramBadRequest in callback_server_management: {e}")
+    finally:
+        await callback.answer()
 
 
 @router.callback_query(F.data == NavAdminTools.SYNC_SERVERS, IsDev())
@@ -84,6 +93,7 @@ async def callback_sync_servers(
     await callback_server_management(
         callback=callback, user=user, session=session, state=state
     )
+    # This popup will now correctly fire after the message is edited and callback is answered.
     await services.notification.show_popup(
         callback=callback,
         text=_("server_management:popup:synced"),
@@ -151,7 +161,6 @@ async def callback_add_server(callback: CallbackQuery, user: User, state: FSMCon
 
 @router.message(AddServerStates.name, IsDev())
 async def message_add_name(message: Message, session: AsyncSession, state: FSMContext, services: ServicesContainer) -> None:
-    # await message.delete()
     server_name = message.text.strip()
     if await Server.get_by_name(session=session, name=server_name):
         await services.notification.notify_by_message(message, _("server_management:ntf:name_exists"), duration=5)
@@ -163,7 +172,6 @@ async def message_add_name(message: Message, session: AsyncSession, state: FSMCo
 
 @router.message(AddServerStates.host, IsDev())
 async def message_add_host(message: Message, state: FSMContext, services: ServicesContainer) -> None:
-    # await message.delete()
     server_host = message.text.strip()
     if not is_valid_host(server_host):
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_host"), duration=5)
@@ -175,7 +183,6 @@ async def message_add_host(message: Message, state: FSMContext, services: Servic
 
 @router.message(AddServerStates.max_clients, IsDev())
 async def message_add_max_clients(message: Message, state: FSMContext, services: ServicesContainer) -> None:
-    # await message.delete()
     server_max_clients = message.text.strip()
     if not is_valid_client_count(server_max_clients):
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_max_clients"), duration=5)
@@ -196,8 +203,8 @@ async def callback_add_confirmation(callback: CallbackQuery, user: User, session
     )
     if server:
         await services.server_pool.sync_servers()
-        await services.notification.show_popup(callback, _("server_management:popup:added_success"))
         await callback_server_management(callback, user, session, state)
+        await services.notification.show_popup(callback, _("server_management:popup:added_success"))
     else:
         await services.notification.show_popup(callback, _("server_management:popup:add_failed"))
 # endregion
@@ -205,12 +212,12 @@ async def callback_add_confirmation(callback: CallbackQuery, user: User, session
 
 # region Server View and Edit Flow
 async def _show_server_view(
-    bot: "Bot", chat_id: int, message_id: int, session: AsyncSession, server_name: str, state: FSMContext
+    bot: "Bot", chat_id: int, message_id: int, session: AsyncSession, server_id: int, state: FSMContext
 ):
     """Helper to display the server view and update state."""
     await state.clear()
     await state.update_data({MAIN_MESSAGE_ID_KEY: message_id})
-    server = await Server.get_by_name(session=session, name=server_name)
+    server = await Server.get_by_id(session=session, id=server_id)
     if not server:
         await bot.edit_message_text("❌ Сервер не найден.", chat_id=chat_id, message_id=message_id)
         return
@@ -231,7 +238,7 @@ async def _show_server_view(
         text=text,
         chat_id=chat_id,
         message_id=message_id,
-        reply_markup=server_keyboard(server.name),
+        reply_markup=server_keyboard(server.id),
     )
 
 
@@ -239,60 +246,70 @@ async def _show_server_view(
 async def callback_show_server(
     callback: CallbackQuery, user: User, session: AsyncSession, state: FSMContext
 ):
-    server_name = callback.data.split(":")[1]
-    logger.info(f"Dev {user.tg_id} opened server view for '{server_name}'.")
+    server_id = int(callback.data.split(":")[1])
+    server = await Server.get_by_id(session, id=server_id)
+    if not server:
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+    
+    logger.info(f"Dev {user.tg_id} opened server view for '{server.name}'.")
     await _show_server_view(
         bot=callback.bot,
         chat_id=callback.message.chat.id,
         message_id=callback.message.message_id,
         session=session,
-        server_name=server_name,
+        server_id=server_id,
         state=state,
     )
 
 
 @router.callback_query(F.data.startswith(f"{NavAdminTools.EDIT_SERVER}:"), IsDev())
 async def callback_edit_server(
-    callback: CallbackQuery, user: User, state: FSMContext
+    callback: CallbackQuery, user: User, state: FSMContext, session: AsyncSession
 ):
-    server_name = callback.data.split(":")[1]
-    logger.info(f"Dev {user.tg_id} entered edit menu for server '{server_name}'.")
+    server_id = int(callback.data.split(":")[1])
+    server = await Server.get_by_id(session, id=server_id)
+    if not server:
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+
+    logger.info(f"Dev {user.tg_id} entered edit menu for server '{server.name}'.")
     await state.set_state(EditServerStates.menu)
-    await state.update_data(server_name_to_edit=server_name)
+    await state.update_data(server_id_to_edit=server_id)
     await callback.message.edit_text(
-        f"✏️ <b>Редактирование сервера:</b> {server_name}",
-        reply_markup=edit_server_keyboard(server_name),
+        f"✏️ <b>Редактирование сервера:</b> {server.name}",
+        reply_markup=edit_server_keyboard(server_id),
     )
 
 
 # --- Handlers to enter edit states ---
 @router.callback_query(F.data.startswith(f"{NavAdminTools.EDIT_SERVER_NAME}:"), EditServerStates.menu, IsDev())
 async def callback_edit_name_prompt(callback: CallbackQuery, state: FSMContext):
-    server_name = callback.data.split(":")[1]
+    server_id = int(callback.data.split(":")[1])
     await state.set_state(EditServerStates.name)
     await callback.message.edit_text(
         "Введите новое название сервера:",
-        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_name}"),
+        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_id}"),
     )
 
 
 @router.callback_query(F.data.startswith(f"{NavAdminTools.EDIT_SERVER_HOST}:"), EditServerStates.menu, IsDev())
 async def callback_edit_host_prompt(callback: CallbackQuery, state: FSMContext):
-    server_name = callback.data.split(":")[1]
+    server_id = int(callback.data.split(":")[1])
     await state.set_state(EditServerStates.host)
     await callback.message.edit_text(
         "Введите новый хост сервера (URL):",
-        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_name}"),
+        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_id}"),
     )
 
 
 @router.callback_query(F.data.startswith(f"{NavAdminTools.EDIT_SERVER_MAX_CLIENTS}:"), EditServerStates.menu, IsDev())
 async def callback_edit_max_clients_prompt(callback: CallbackQuery, state: FSMContext):
-    server_name = callback.data.split(":")[1]
+    server_id = int(callback.data.split(":")[1])
     await state.set_state(EditServerStates.max_clients)
     await callback.message.edit_text(
         "Введите новое максимальное количество клиентов:",
-        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_name}"),
+        reply_markup=back_keyboard(f"{NavAdminTools.EDIT_SERVER}:{server_id}"),
     )
 
 
@@ -300,7 +317,6 @@ async def callback_edit_max_clients_prompt(callback: CallbackQuery, state: FSMCo
 @router.message(EditServerStates.name, IsDev())
 async def message_edit_name(message: Message, session: AsyncSession, state: FSMContext, services: ServicesContainer):
     new_name = message.text.strip()
-    # await message.delete()
     if await Server.get_by_name(session, name=new_name):
         await services.notification.notify_by_message(message, _("server_management:ntf:name_exists"), duration=5)
         return
@@ -310,7 +326,6 @@ async def message_edit_name(message: Message, session: AsyncSession, state: FSMC
 @router.message(EditServerStates.host, IsDev())
 async def message_edit_host(message: Message, state: FSMContext, session: AsyncSession, services: ServicesContainer):
     new_host = message.text.strip()
-    # await message.delete()
     if not is_valid_host(new_host):
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_host"), duration=5)
         return
@@ -320,7 +335,6 @@ async def message_edit_host(message: Message, state: FSMContext, session: AsyncS
 @router.message(EditServerStates.max_clients, IsDev())
 async def message_edit_max_clients(message: Message, state: FSMContext, session: AsyncSession, services: ServicesContainer):
     new_max_clients = message.text.strip()
-    # await message.delete()
     if not is_valid_client_count(new_max_clients):
         await services.notification.notify_by_message(message, _("server_management:ntf:invalid_max_clients"), duration=5)
         return
@@ -329,32 +343,27 @@ async def message_edit_max_clients(message: Message, state: FSMContext, session:
 
 async def handle_server_edit(message: Message, state: FSMContext, session: AsyncSession, services: ServicesContainer, field_to_update: str, new_value: Any):
     data = await state.get_data()
-    original_name = data.get("server_name_to_edit")
+    server_id = data.get("server_id_to_edit")
     main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
 
-    # 1. Сначала находим объект сервера в базе данных
-    server_to_edit = await Server.get_by_name(session, name=original_name)
+    server_to_edit = await Server.get_by_id(session, id=server_id)
     if not server_to_edit:
         await services.notification.notify_by_message(message, "❌ Не удалось найти сервер для обновления.", duration=5)
         return
 
-    # 2. Меняем нужное поле у найденного объекта
+    # Update the server object directly and commit
     setattr(server_to_edit, field_to_update, new_value)
-    
-    # 3. Сохраняем изменения в сессии
     await session.commit()
 
     await services.server_pool.sync_servers()
-
     await services.notification.notify_by_message(message, "✅ Сервер успешно обновлен!", duration=3)
 
-    new_server_name = new_value if field_to_update == "name" else original_name
     await _show_server_view(
         bot=message.bot,
         chat_id=message.chat.id,
         message_id=main_message_id,
         session=session,
-        server_name=new_server_name,
+        server_id=server_id,
         state=state,
     )
 
@@ -362,20 +371,29 @@ async def handle_server_edit(message: Message, state: FSMContext, session: Async
 # --- Other server actions ---
 @router.callback_query(F.data.startswith(f"{NavAdminTools.PING_SERVER}:"), IsDev())
 async def callback_ping_server(callback: CallbackQuery, session: AsyncSession, services: ServicesContainer):
-    server_name = callback.data.split(":")[1]
-    server = await Server.get_by_name(session=session, name=server_name)
-    ping = await ping_url(server.host) if server else None
+    server_id = int(callback.data.split(":")[1])
+    server = await Server.get_by_id(session=session, id=server_id)
+    if not server:
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+        
+    ping = await ping_url(server.host)
     if ping:
-        await services.notification.show_popup(callback, _("server_management:popup:ping").format(server_name=server_name, ping=ping))
+        await services.notification.show_popup(callback, _("server_management:popup:ping").format(server_name=server.name, ping=ping))
     else:
-        await services.notification.show_popup(callback, _("server_management:popup:ping_failed").format(server_name=server_name))
+        await services.notification.show_popup(callback, _("server_management:popup:ping_failed").format(server_name=server.name))
 
 
 @router.callback_query(F.data.startswith(f"{NavAdminTools.DELETE_SERVER}:"), IsDev())
 async def callback_delete_server(callback: CallbackQuery, user: User, session: AsyncSession, state: FSMContext, services: ServicesContainer):
-    server_name = callback.data.split(":")[1]
-    logger.info(f"Dev {user.tg_id} deleting server '{server_name}'.")
-    deleted = await Server.delete(session=session, name=server_name)
+    server_id = int(callback.data.split(":")[1])
+    server = await Server.get_by_id(session=session, id=server_id)
+    if not server:
+        await callback.answer("❌ Сервер не найден.", show_alert=True)
+        return
+        
+    logger.info(f"Dev {user.tg_id} deleting server '{server.name}'.")
+    deleted = await Server.delete(session=session, name=server.name) # Keep using name for now, or refactor delete
     if deleted:
         await services.server_pool.sync_servers()
         await services.notification.show_popup(callback, _("server_management:popup:deleted_success"))

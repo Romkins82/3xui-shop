@@ -152,7 +152,7 @@ def maintenance_mode_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def servers_keyboard(servers: list) -> InlineKeyboardMarkup:
+def servers_keyboard(servers: list[Server]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     builder.add(
@@ -169,13 +169,12 @@ def servers_keyboard(servers: list) -> InlineKeyboardMarkup:
         )
     )
 
-    server: Server
     for server in servers:
         status = "🟢" if server.online else "🔴"
         builder.row(
             InlineKeyboardButton(
                 text=f"{status} {server.name}",
-                callback_data=f"{NavAdminTools.SHOW_SERVER}:{server.name}",
+                callback_data=f"{NavAdminTools.SHOW_SERVER}:{server.id}",
             )
         )
 
@@ -184,23 +183,23 @@ def servers_keyboard(servers: list) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def server_keyboard(server_name: str) -> InlineKeyboardMarkup:
+def server_keyboard(server_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     builder.row(
         InlineKeyboardButton(
             text=_("server_management:button:ping"),
-            callback_data=f"{NavAdminTools.PING_SERVER}:{server_name}",
+            callback_data=f"{NavAdminTools.PING_SERVER}:{server_id}",
         ),
         InlineKeyboardButton(
             text="✏️ Изменить",
-            callback_data=f"{NavAdminTools.EDIT_SERVER}:{server_name}",
+            callback_data=f"{NavAdminTools.EDIT_SERVER}:{server_id}",
         ),
     )
     builder.row(
         InlineKeyboardButton(
             text=_("server_management:button:delete"),
-            callback_data=f"{NavAdminTools.DELETE_SERVER}:{server_name}",
+            callback_data=f"{NavAdminTools.DELETE_SERVER}:{server_id}",
         )
     )
 
@@ -209,27 +208,27 @@ def server_keyboard(server_name: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def edit_server_keyboard(server_name: str) -> InlineKeyboardMarkup:
+def edit_server_keyboard(server_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(
             text="Изменить название",
-            callback_data=f"{NavAdminTools.EDIT_SERVER_NAME}:{server_name}",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_NAME}:{server_id}",
         )
     )
     builder.row(
         InlineKeyboardButton(
             text="Изменить хост",
-            callback_data=f"{NavAdminTools.EDIT_SERVER_HOST}:{server_name}",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_HOST}:{server_id}",
         )
     )
     builder.row(
         InlineKeyboardButton(
             text="Изменить макс. клиентов",
-            callback_data=f"{NavAdminTools.EDIT_SERVER_MAX_CLIENTS}:{server_name}",
+            callback_data=f"{NavAdminTools.EDIT_SERVER_MAX_CLIENTS}:{server_id}",
         )
     )
-    builder.row(back_button(f"{NavAdminTools.SHOW_SERVER}:{server_name}"))
+    builder.row(back_button(f"{NavAdminTools.SHOW_SERVER}:{server_id}"))
     return builder.as_markup()
 
 
