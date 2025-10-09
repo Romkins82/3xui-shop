@@ -283,11 +283,10 @@
 - **Aleksey**
 - [**@DmitryKryloff**](https://t.me/DmitryKryloff)
 
-Вы можете поддержать меня следующими способами ([или рублями](https://t.me/shop_3xui/2/1580)):
+Вы можете поддержать меня следующими способами:
 
-- **Bitcoin:** `bc1ql53lcaukdv3thxcheh3cmgucwlwkr929gar0cy`
-- **Ethereum:** `0xe604a10258d26c085ada79cdea9a84a5b0894b91`
-- **USDT (TRC20):** `TUqDQ4mdtVJZC76789kPYBMzaLFQBDdKhE`
-- **TON:** `UQDogBlLFgrxkVWvDJn6YniCwrJDro7hbk5AqDMoSzmBQ-KQ`
+- **Bitcoin:** `3Nq7fbCNy3CJfH6n5pJCReZrdh8VJhnS5y`
+- **USDT (TRC20):** `TXVmVV9YXkGrN6fi4Cunk9pZBJdvKKwUhe`
+
 
 Любая поддержка поможет мне уделять больше времени разработке и ускорить проект!
