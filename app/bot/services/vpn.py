@@ -264,7 +264,10 @@ class VPNService:
             client.flow = flow
             client.total_gb = total_gb
             
-            await connection.api.client.update(client_uuid=client.id, client=client)
+            client_uuid_for_update = client.sub_id
+            client.id = client_uuid_for_update
+
+            await connection.api.client.update(client_uuid=client_uuid_for_update, client=client)
             logger.info(f"Client {user.tg_id} updated successfully.")
             return True
         except Exception as exception:

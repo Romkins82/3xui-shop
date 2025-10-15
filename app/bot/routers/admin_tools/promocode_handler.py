@@ -89,10 +89,7 @@ async def callback_duration_selected(
         )
 
 
-# endregion
 
-
-# region: Delete Promocode
 @router.callback_query(F.data == NavAdminTools.DELETE_PROMOCODE, IsAdmin())
 async def callback_delete_promocode(callback: CallbackQuery, user: User, state: FSMContext) -> None:
     logger.info(f"Admin {user.tg_id} started deleting promocode.")
@@ -118,8 +115,6 @@ async def handle_promocode_input_delete(
     data = await state.get_data()
     main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
 
-    # Удаляем сообщение пользователя с промокодом
-    await message.delete()
 
     if await Promocode.delete(session=session, code=input_promocode):
         # Редактируем исходное сообщение админ-панели
@@ -143,10 +138,7 @@ async def handle_promocode_input_delete(
             duration=5,
         )
 
-# endregion
 
-
-# region Edit Promocode
 @router.callback_query(F.data == NavAdminTools.EDIT_PROMOCODE, IsAdmin())
 async def callback_edit_promocode(callback: CallbackQuery, user: User, state: FSMContext) -> None:
     logger.info(f"Admin {user.tg_id} started editing promocode.")
@@ -171,8 +163,6 @@ async def handle_promocode_input_edit(
     data = await state.get_data()
     main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
     
-    # Удаляем сообщение пользователя
-    await message.delete()
 
     promocode = await Promocode.get(session=session, code=input_promocode)
     if promocode and not promocode.is_activated:
@@ -218,5 +208,3 @@ async def callback_duration_selected_edit(
             duration=format_subscription_period(promocode.duration),
         ),
     )
-
-# endregion

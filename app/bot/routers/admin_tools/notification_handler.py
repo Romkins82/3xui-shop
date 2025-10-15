@@ -85,7 +85,6 @@ async def message_user_id(
         user_id = message.text.strip()
     logger.info(f"Admin {user.tg_id} sent user id {user_id} for notification.")
     
-    await message.delete()
 
     if is_valid_user_id(user_id):
         target_user = await User.get(session=session, tg_id=user_id)
@@ -129,7 +128,6 @@ async def message_to_user(
     user_id = user_ids[0]
     logger.info(f"Admin {user.tg_id} sent message for user {user_id}.")
     
-    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})
@@ -215,7 +213,6 @@ async def message_to_all(
     text = message.text.strip()
     logger.info(f"Admin {user.tg_id} sent message for all.")
     
-    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})
@@ -339,7 +336,6 @@ async def message_edit(
     text = message.text.strip()
     logger.info(f"Admin {user.tg_id} edit notification.")
     
-    await message.delete()
 
     if is_valid_message_text(text):
         await state.update_data({NOTIFICATION_PRE_MESSAGE_TEXT_KEY: text})

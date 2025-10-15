@@ -24,7 +24,7 @@ from app.bot.keyboards.admin.user_editor_keyboards import (
 from app.bot.services.vpn import VPNService
 from app.bot.services.server_pool import ServerPoolService
 from app.bot.utils.navigation import NavAdminTools 
-from app.bot.utils.constants import UNLIMITED
+from app.bot.utils.constants import MAIN_MESSAGE_ID_KEY, UNLIMITED
 from app.db.models import User, Server, Transaction
 from app.bot.models import ServicesContainer
 
@@ -429,8 +429,7 @@ async def handle_new_device_count_input(
     target_user_id = data.get("target_user_id")
     main_message_id = data.get(MAIN_MESSAGE_ID_KEY) # Получаем ID главного сообщения
 
-    # Удаляем сообщение пользователя с новым количеством
-    await message.delete()
+    # СТРОКА УДАЛЕНА: await message.delete()
 
     if not target_user_id or not main_message_id:
         # Отправляем временное сообщение об ошибке, если что-то пошло не так
@@ -602,8 +601,7 @@ async def handle_new_duration_days_input(
     target_user_id = data.get("target_user_id")
     main_message_id = data.get(MAIN_MESSAGE_ID_KEY)
 
-    # Удаляем сообщение пользователя с количеством дней
-    await message.delete()
+    # СТРОКА УДАЛЕНА: await message.delete()
 
     if not target_user_id or not main_message_id:
         await services.notification.notify_by_message(message, _("user_editor:error:state_lost_user_id_generic"), duration=5)
@@ -981,6 +979,3 @@ async def handle_execute_creation(callback: types.CallbackQuery, state: FSMConte
         await callback.message.edit_text(_("user_editor:error:user_creation_failed").format(user_id=target_user_id))
         
     await state.clear()
-    # Optionally, can show user list again here
-
-# [END CREATE USER FLOW]

@@ -7,7 +7,7 @@ APP_WINDOWS_LINK = (
 
 APP_IOS_SCHEME = "v2raytun://import/"
 APP_ANDROID_SCHEME = "v2raytun://import/"
-APP_WINDOWS_SCHEME = "hiddify://import/"
+APP_WINDOWS_SCHEME = "v2raytun://import/"
 
 # endregion
 
