@@ -1,3 +1,5 @@
+# Расположение: romkins82/3xui-shop/3xui-shop-801875a292110cf72a87578e0dffa0f1157117de/app/bot/routers/subscription/aggregator_handler.py
+
 import asyncio
 import base64
 import logging
@@ -15,7 +17,8 @@ from app.config import Config
 from app.db.models import User
 
 if TYPE_CHECKING:
-    from app.bot.services import ServerPoolService
+    from app.bot.services import ServerPoolService, VPNService, ServicesContainer
+    from app.bot.models import ClientData
 
 logger = logging.getLogger(__name__)
 routes = RouteTableDef()
@@ -30,12 +33,37 @@ async def get_aggregated_subscription(request: Request) -> Response:
 
         session_factory: async_sessionmaker = request.app["session_maker"]
         server_pool: "ServerPoolService" = request.app["server_pool"]
+        services: "ServicesContainer" = request.app["services_container"]
+        vpn_service: "VPNService" = services.vpn
         
         async with session_factory() as session:
             result = await session.execute(select(User).where(User.vpn_id == vpn_id))
             user = result.scalar_one_or_none()
             if not user:
                 return Response(status=404, text="Subscription not found")
+
+        client_data: "ClientData" = await vpn_service.get_client_data(user)
+        
+        user_info_header = ""
+        if client_data:
+            upload = client_data._traffic_up
+            download = client_data._traffic_down
+            total = client_data._traffic_total
+            expire_ts = client_data._expiry_timestamp
+
+            total_for_header = total if total > 0 else (upload + download)
+
+            user_info_parts = [
+                f"upload={upload}",
+                f"download={download}",
+                f"total={total_for_header}",
+            ]
+
+            if expire_ts > 0:
+                user_info_parts.append(f"expire={expire_ts // 1000}")
+
+            user_info_header = "; ".join(user_info_parts)
+
 
         servers = await server_pool.get_available_servers()
         if not servers:
@@ -103,20 +131,25 @@ async def get_aggregated_subscription(request: Request) -> Response:
 
         final_subscription = "\n".join(all_configs)
         final_subscription_base64 = base64.b64encode(final_subscription.encode('utf-8')).decode('utf-8')
-
-        # --- НОВЫЙ КОД: Добавляем название подписки ---
-        subscription_title = "FreeNet VPN"  # <-- Можете изменить это название
+        
+        subscription_title = "FreeNet VPN"
         encoded_title = base64.b64encode(subscription_title.encode('utf-8')).decode('utf-8')
+        
+        # --- ИЗМЕНЕНИЕ: Добавляем ОБА заголовка для максимальной совместимости ---
         response_headers = {
-            'Profile-Title': f'base64:{encoded_title}'
+            'Profile-Title': f'base64:{encoded_title}',
+            'Profile-Config-Editable': 'false', # Для некоторых клиентов
+            'Editable': 'false',                # Для Hiddify и аналогов
         }
-        # -------------------------------------------
+        
+        if user_info_header:
+            response_headers['Subscription-Userinfo'] = user_info_header
 
         return Response(
             status=200, 
             text=final_subscription_base64, 
             content_type="text/plain",
-            headers=response_headers  # <-- Добавляем заголовки в ответ
+            headers=response_headers
         )
 
     except Exception as e:
