@@ -163,7 +163,7 @@ class NotificationService:
     async def notify_purchase_success(
         self,
         user_id: int,
-        key: str,
+        key: str, # <-- Теперь это будет URL
         message_effect_id: str = MESSAGE_EFFECT_IDS["🎉"],
     ) -> None:
         await self.notify_by_id(

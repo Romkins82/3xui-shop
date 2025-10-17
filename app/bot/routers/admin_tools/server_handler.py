@@ -18,6 +18,7 @@ from app.bot.utils.constants import (
     SERVER_HOST_KEY,
     SERVER_MAX_CLIENTS_KEY,
     SERVER_NAME_KEY,
+    SERVER_LOCATION_KEY,  # <-- ВОТ ИСПРАВЛЕНИЕ
 )
 from app.bot.utils.navigation import NavAdminTools
 from app.bot.utils.network import ping_url
@@ -435,5 +436,3 @@ async def callback_delete_server(callback: CallbackQuery, user: User, session: A
         await callback_server_management(callback, user, session, state)
     else:
         await services.notification.show_popup(callback, _("server_management:popup:delete_failed"))
-
-# endregion

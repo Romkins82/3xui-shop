@@ -30,7 +30,6 @@ class ServerPoolService:
                 username=self.config.xui.USERNAME,
                 password=self.config.xui.PASSWORD,
                 token=self.config.xui.TOKEN,
-                # use_tls_verify=False, # Раскомментируйте, если используете самоподписанные SSL
                 logger=logging.getLogger(f"xui_{server.name}"),
             )
             try:
@@ -69,23 +68,30 @@ class ServerPoolService:
 
     async def get_connection(self, user: User) -> Connection | None:
         if not user.server_id:
-            logger.debug(f"User {user.tg_id} not assigned to any server.")
+            logger.debug(f"User {user.tg_id} not assigned to any primary server.")
             return None
-        connection = self._servers.get(user.server_id)
-        if not connection:
-            logger.critical(f"Server {user.server_id} not found in pool.")
-            async with self.session() as session:
-                server = await Server.get_by_id(session=session, id=user.server_id)
-            if server:
-                logger.debug(f"Server {server.name} ({server.host}) found in database.")
-            else:
-                logger.error(f"Server {user.server_id} not found in database.")
-            return None
-        async with self.session() as session:
-            server = await Server.get_by_id(session=session, id=user.server_id)
-        connection.server = server
-        return connection
+        return await self.get_connection_by_server_id(user.server_id)
 
+    async def get_connection_by_server_id(self, server_id: int) -> Connection | None:
+        connection = self._servers.get(server_id)
+        if not connection:
+            logger.critical(f"Server {server_id} not found in pool.")
+            async with self.session() as session:
+                server = await Server.get_by_id(session=session, id=server_id)
+            if server:
+                logger.debug(f"Server {server.name} ({server.host}) found in database. Adding to pool.")
+                await self._add_server(server)
+                return self._servers.get(server.id)
+            else:
+                logger.error(f"Server {server_id} not found in database.")
+                return None
+        # Обновляем данные сервера из БД на случай, если они изменились
+        async with self.session() as session:
+            server = await Server.get_by_id(session=session, id=server_id)
+        if server:
+            connection.server = server
+        return connection
+        
     async def sync_servers(self) -> None:
         async with self.session() as session:
             db_servers = await Server.get_all(session)
@@ -106,17 +112,24 @@ class ServerPoolService:
         logger.info(f"Sync complete. Currently active servers: {len(self._servers)}")
 
     async def assign_server_to_user(self, user: User, server_id: int | None = None) -> Server | None:
+        # Эта логика больше не нужна, т.к. пользователь создается на всех серверах
+        # Но для обратной совместимости можно оставить привязку к "основному" серверу
+        if user.server_id:
+             async with self.session() as session:
+                return await Server.get_by_id(session, user.server_id)
+
+        server_to_assign = None
         if server_id:
             async with self.session() as session:
-                server = await Server.get_by_id(session, server_id)
+                server_to_assign = await Server.get_by_id(session, server_id)
         else:
-            server = await self.get_available_server()
+            server_to_assign = await self.get_available_server()
 
-        if server:
-            user.server_id = server.id
+        if server_to_assign:
+            user.server_id = server_to_assign.id
             async with self.session() as session:
-                await User.update(session=session, tg_id=user.tg_id, server_id=server.id)
-            return server
+                await User.update(session=session, tg_id=user.tg_id, server_id=server_to_assign.id)
+            return server_to_assign
         return None
 
     async def get_available_server(self) -> Server | None:

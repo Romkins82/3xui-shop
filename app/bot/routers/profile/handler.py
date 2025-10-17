@@ -80,12 +80,18 @@ async def callback_show_key(
     services: ServicesContainer,
 ) -> None:
     logger.info(f"User {user.tg_id} looked key.")
-    key = await services.vpn.get_key(user)
+    # <-- НАЧАЛО ИЗМЕНЕНИЙ -->
+    subscription_url = await services.vpn.get_subscription_url(user)
+    if not subscription_url:
+        await callback.answer(_("subscription:popup:error_generating_key"), show_alert=True)
+        return
+        
     key_text = _("profile:message:key")
-    message = await callback.message.answer(key_text.format(key=key, seconds_text=_("10 seconds")))
+    message = await callback.message.answer(key_text.format(key=subscription_url, seconds_text=_("10 seconds")))
+    # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
 
     for seconds in range(9, 0, -1):
         seconds_text = _("1 second", "{} seconds", seconds).format(seconds)
         await asyncio.sleep(1)
-        await message.edit_text(text=key_text.format(key=key, seconds_text=seconds_text))
+        await message.edit_text(text=key_text.format(key=subscription_url, seconds_text=seconds_text))
     await message.delete()

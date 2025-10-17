@@ -15,9 +15,11 @@ from . import (
 )
 
 from .admin_tools import user_editor_handlers
+from .subscription import aggregator_handler # <-- Добавить
 
 def include(app: Application, dispatcher: Dispatcher) -> None:
     app.router.add_get(CONNECTION_WEBHOOK, download.handler.redirect_to_connection)
+    app.add_routes(aggregator_handler.routes) # <-- Добавить
     dispatcher.include_routers(
         misc.error_handler.router,
         misc.notification_handler.router,

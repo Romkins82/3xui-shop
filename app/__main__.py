@@ -127,6 +127,13 @@ async def main() -> None:
         services=services_container,
     )
 
+    # <-- НАЧАЛО ИЗМЕНЕНИЙ -->
+    # Сохраняем зависимости в контекст веб-приложения для доступа в обработчиках
+    app["session_maker"] = db.session
+    app["server_pool"] = services_container.server_pool
+    app["config"] = config
+    # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
+
     # Create the dispatcher
     dispatcher = Dispatcher(
         db=db,

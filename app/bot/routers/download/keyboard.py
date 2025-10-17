@@ -58,17 +58,21 @@ def download_keyboard(platform: NavDownload, url: str, key: str) -> InlineKeyboa
             scheme = APP_WINDOWS_SCHEME
             download = APP_WINDOWS_LINK
     
-    # ИСПРАВЛЕНИЕ: Добавляем проверку, что ключ существует, перед кодированием
     connect = None
     if key:
-        encoded_key = quote(key, safe='')
-        connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={encoded_key}"
+        # ИСПРАВЛЕНИЕ: Мы НЕ кодируем URL подписки (key).
+        # Браузер сам сделает это правильно при переходе по итоговой ссылке.
+        # Таким образом, в параметр `key` попадет чистый URL: https://...
+        connect = f"{url}{CONNECTION_WEBHOOK}?scheme={scheme}&key={key}"
 
+    # Кнопка для скачивания приложения
     builder.button(text=_("download:button:download"), url=download)
-
+    
+    # Кнопка "Подключиться", которая откроет приложение для импорта
     builder.button(
         text=_("download:button:connect"),
-        url=connect, # Используем 'connect' который будет None, если ключа нет
+        url=connect, 
+        # Если ключа нет, кнопка поведет на страницу покупки подписки
         callback_data=NavSubscription.MAIN if not key else None,
     )
 
