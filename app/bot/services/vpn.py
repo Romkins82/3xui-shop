@@ -276,11 +276,33 @@ class VPNService:
                 else:
                     replace = kwargs.get('replace_duration', False)
                     current_time = get_current_timestamp()
+<<<<<<< HEAD
                     expiry_to_use = current_time if replace else max(client.expiry_time, current_time)
                     client.expiry_time = add_days_to_timestamp(expiry_to_use, duration)
             if 'enable' in kwargs:
                 client.enable = kwargs['enable']
             return client
+=======
+                    if not replace_duration:
+                        expiry_time_to_use = max(client.expiry_time, current_time)
+                    else:
+                        expiry_time_to_use = current_time
+                    client.expiry_time = add_days_to_timestamp(timestamp=expiry_time_to_use, days=duration)
+            
+            client.enable = enable
+            client.flow = flow
+            client.total_gb = total_gb
+            
+            client_uuid_for_update = client.sub_id
+            client.id = client_uuid_for_update
+
+            await connection.api.client.update(client_uuid=client_uuid_for_update, client=client)
+            logger.info(f"Client {user.tg_id} updated successfully.")
+            return True
+        except Exception as exception:
+            logger.error(f"Error updating client {user.tg_id}: {exception}", exc_info=True)
+            return False
+>>>>>>> e5ba3e606e45ca9065201ccd8a6e4faa4c7c1521
 
         successful_updates, _ = await self._perform_action_on_all_servers(
             user, 'update', update_payload_func=update_payload_func
