@@ -15,8 +15,8 @@ from app.db.models import User
 from .keyboard import (
     devices_keyboard,
     duration_keyboard,
+    multiconfig_keyboard,
     payment_method_keyboard,
-    server_keyboard,
     subscription_keyboard,
 )
 
@@ -44,7 +44,7 @@ async def show_subscription(
     await callback.message.edit_text(
         text=text,
         reply_markup=subscription_keyboard(
-            has_subscription=client_data,
+            has_subscription=bool(client_data),
             callback_data=callback_data,
         ),
     )
@@ -132,7 +132,6 @@ async def callback_subscription_process(
 ) -> None:
     logger.info(f"User {user.tg_id} started subscription process.")
     
-    # ИЗМЕНЕНИЕ: Получаем только доступные серверы
     servers = await services.server_pool.get_available_servers()
 
     if not servers:
@@ -143,43 +142,10 @@ async def callback_subscription_process(
         )
         return
 
-    if callback_data.server_id:
-        selected_server = next(
-            (server for server in servers if server.id == callback_data.server_id),
-            None,
-        )
-
-        if selected_server:
-            logger.debug(
-                "User %s continues with server %s.",
-                user.tg_id,
-                selected_server.name,
-            )
-            callback_data.state = NavSubscription.DEVICES
-            await callback.message.edit_text(
-                text=_("subscription:message:devices"),
-                reply_markup=devices_keyboard(
-                    services.plan.get_all_plans(), callback_data
-                ),
-            )
-            return
-
-        logger.warning(
-            "Previously selected server %s is no longer available for user %s.",
-            callback_data.server_id,
-            user.tg_id,
-        )
-        callback_data.server_id = 0
-
-        await services.notification.show_popup(
-            callback=callback,
-            text=_("subscription:popup:server_unavailable"),
-        )
-
     callback_data.state = NavSubscription.SERVER
     await callback.message.edit_text(
         text=_("subscription:message:server"),
-        reply_markup=server_keyboard(servers, callback_data),
+        reply_markup=multiconfig_keyboard(callback_data),
     )
 
 
@@ -190,45 +156,19 @@ async def callback_server_selected(
     callback_data: SubscriptionData,
     services: ServicesContainer,
 ) -> None:
-    logger.info(
-        "User %s selected server with id %s.",
-        user.tg_id,
-        callback_data.server_id,
-    )
+    logger.info(f"User {user.tg_id} selected multi-config.")
 
-    # ИЗМЕНЕНИЕ: Получаем только доступные серверы
     servers = await services.server_pool.get_available_servers()
-
-    if not callback_data.server_id:
-        callback_data.state = NavSubscription.SERVER
-        await callback.message.edit_text(
-            text=_("subscription:message:server"),
-            reply_markup=server_keyboard(servers, callback_data),
-        )
-        return
-
-    selected_server = next(
-        (server for server in servers if server.id == callback_data.server_id),
-        None,
-    )
-
-    if not selected_server:
-        logger.warning(
-            "Server %s is no longer available for user %s.",
-            callback_data.server_id,
-            user.tg_id,
-        )
-        callback_data.server_id = 0
+    if not servers:
         await services.notification.show_popup(
             callback=callback,
-            text=_("subscription:popup:server_unavailable"),
-        )
-        callback_data.state = NavSubscription.SERVER
-        await callback.message.edit_text(
-            text=_("subscription:message:server"),
-            reply_markup=server_keyboard(servers, callback_data),
+            text=_("subscription:popup:no_available_servers"),
         )
         return
+
+    # Automatically select the first available server
+    callback_data.server_id = servers[0].id
+    logger.info(f"Automatically selected server {callback_data.server_id} for user {user.tg_id}.")
 
     callback_data.state = NavSubscription.DEVICES
     await callback.message.edit_text(

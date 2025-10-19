@@ -6,7 +6,10 @@ from aiogram.types import CallbackQuery
 from aiogram.utils.i18n import gettext as _
 
 from app.bot.models import ServicesContainer, SubscriptionData
-from app.bot.routers.subscription.keyboard import server_keyboard, trial_success_keyboard
+from app.bot.routers.subscription.keyboard import (
+    multiconfig_keyboard,
+    trial_success_keyboard,
+)
 from app.bot.utils.constants import MAIN_MESSAGE_ID_KEY, PREVIOUS_CALLBACK_KEY
 from app.bot.utils.formatting import format_subscription_period
 from app.bot.utils.navigation import NavMain, NavSubscription
@@ -46,7 +49,7 @@ async def callback_get_trial(
     callback_data = SubscriptionData(state=NavSubscription.TRIAL_SERVER, user_id=user.tg_id)
     await callback.message.edit_text(
         text=_("subscription:message:server"),
-        reply_markup=server_keyboard(servers, callback_data),
+        reply_markup=multiconfig_keyboard(callback_data),
     )
 
 
@@ -59,10 +62,20 @@ async def callback_trial_server_selected(
     config: Config,
     callback_data: SubscriptionData,
 ) -> None:
-    logger.info(f"User {user.tg_id} selected server {callback_data.server_id} for trial.")
+    logger.info(f"User {user.tg_id} selected multi-config for trial.")
+    
+    servers = await services.server_pool.get_available_servers()
+    if not servers:
+        await services.notification.show_popup(
+            callback=callback, text=_("subscription:popup:no_available_servers")
+        )
+        return
+
+    server_id = servers[0].id
+    logger.info(f"Auto-selecting server {server_id} for user {user.tg_id} trial.")
 
     trial_period = config.shop.TRIAL_PERIOD
-    success = await services.subscription.gift_trial(user=user, server_id=callback_data.server_id)
+    success = await services.subscription.gift_trial(user=user, server_id=server_id)
 
     main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
     if success:
