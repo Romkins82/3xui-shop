@@ -317,8 +317,15 @@ class VPNService:
         # Дополнительно очищаем server_id и vpn_id в БД
         if successful_deletions > 0:
             async with self.session() as session:
-                await User.update(session, tg_id=user.tg_id, server_id=None, vpn_id=None)
-            logger.info(f"Cleared server_id and vpn_id for user {user.tg_id} in DB after deletion.")
+                
+                # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                # Мы не можем установить vpn_id в None из-за ограничения 'NOT NULL'
+                # Вместо этого мы генерируем новый UUID, чтобы "отвязать" пользователя от старого.
+                new_vpn_id = str(uuid.uuid4())
+                await User.update(session, tg_id=user.tg_id, server_id=None, vpn_id=new_vpn_id)
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+                
+            logger.info(f"Cleared server_id and reset vpn_id for user {user.tg_id} in DB after deletion.")
         return successful_deletions > 0
 
     async def ensure_client_exists_on_server(self, user: User, server_id: int, session: AsyncSession) -> bool:
