@@ -76,53 +76,19 @@ def devices_keyboard(
         )
 
     builder.adjust(2)
-    previous_state = callback_data.state
-    previous_server_id = callback_data.server_id
-    callback_data.state = NavSubscription.SERVER
-    callback_data.server_id = 0
-    builder.row(
-        back_button(
-            callback_data.pack(),
-            text=_("subscription:button:change_server"),
-        )
-    )
-    callback_data.state = previous_state
-    callback_data.server_id = previous_server_id
     builder.row(back_button(NavSubscription.MAIN))
     builder.row(back_to_main_menu_button())
     return builder.as_markup()
 
 
-def server_keyboard(
-    servers: list["Server"],
-    callback_data: SubscriptionData,
-    is_admin: bool = False,
-) -> InlineKeyboardMarkup:
+def multiconfig_keyboard(callback_data: SubscriptionData) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-
-    original_server_id = callback_data.server_id
-
-    for server in servers:
-        callback_data.server_id = server.id
-        
-        if is_admin:
-            load = f"{server.current_clients}/{server.max_clients}"
-            location = f"{server.location} · " if server.location else ""
-            status = "🟢" if server.current_clients < server.max_clients else "⚠️"
-            text = f"{status} {server.name} | {location}{load}"
-        else:
-            
-            text = f"{server.location} | {server.name}" if server.location else server.name
-
-        builder.row(
-            InlineKeyboardButton(
-                text=text,
-                callback_data=callback_data.pack(),
-            )
+    builder.row(
+        InlineKeyboardButton(
+            text=_("subscription:button:multiconfig"),
+            callback_data=callback_data.pack(),
         )
-
-    callback_data.server_id = original_server_id
-
+    )
     builder.row(back_button(NavSubscription.MAIN))
     builder.row(back_to_main_menu_button())
     return builder.as_markup()
@@ -208,20 +174,6 @@ def payment_method_keyboard(
     )
 
     builder.row(back_to_main_menu_button())
-    return builder.as_markup()
-
-
-def payment_success_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        InlineKeyboardButton(
-            text=_("subscription:button:download_app"),
-            callback_data=NavMain.REDIRECT_TO_DOWNLOAD,
-        )
-    )
-
-    builder.row(close_notification_button())
     return builder.as_markup()
 
 

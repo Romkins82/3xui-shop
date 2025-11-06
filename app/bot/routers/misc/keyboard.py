@@ -45,3 +45,17 @@ def cancel_button(callback: str) -> InlineKeyboardButton:
 
 def cancel_keyboard(callback: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[cancel_button(callback)]])
+
+
+def payment_success_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(
+            text=_("subscription:button:download_app"),
+            callback_data=NavMain.REDIRECT_TO_DOWNLOAD,
+        )
+    )
+
+    builder.row(close_notification_button())
+    return builder.as_markup()

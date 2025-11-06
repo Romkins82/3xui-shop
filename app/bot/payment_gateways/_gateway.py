@@ -78,69 +78,79 @@ class PaymentGateway(ABC):
                 status=TransactionStatus.COMPLETED,
             )
 
-        if self.config.shop.REFERRER_REWARD_ENABLED:
-            await self.services.referral.add_referrers_rewards_on_payment(
-                referred_tg_id=data.user_id,
-                payment_amount=data.price,  # TODO: (!) add currency unified processing
-                payment_id=payment_id,
+            if self.config.shop.REFERRER_REWARD_ENABLED:
+                await self.services.referral.add_referrers_rewards_on_payment(
+                    referred_tg_id=data.user_id,
+                    payment_amount=data.price,  # TODO: (!) add currency unified processing
+                    payment_id=payment_id,
+                )
+
+            await self.services.notification.notify_developer(
+                text=EVENT_PAYMENT_SUCCEEDED_TAG
+                + "\n\n"
+                + _("payment:event:payment_succeeded").format(
+                    payment_id=payment_id,
+                    user_id=user.tg_id,
+                    devices=format_device_count(data.devices),
+                    duration=format_subscription_period(data.duration),
+                ),
             )
 
-        await self.services.notification.notify_developer(
-            text=EVENT_PAYMENT_SUCCEEDED_TAG
-            + "\n\n"
-            + _("payment:event:payment_succeeded").format(
-                payment_id=payment_id,
-                user_id=user.tg_id,
-                devices=format_device_count(data.devices),
-                duration=format_subscription_period(data.duration),
-            ),
-        )
+            locale = user.language_code if user else DEFAULT_LANGUAGE
+            with self.i18n.use_locale(locale):
+                
+                # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+                # Если пользователь продлевает/меняет подписку и у него нет server_id
+                # (т.к. он был очищен задачей), назначаем ему новый.
+                if (data.is_extend or data.is_change) and not user.server_id:
+                    logger.info(f"User {user.tg_id} has no primary server_id. Re-assigning one after payment.")
+                    await self.services.server_pool.assign_server_to_user(user, session=session)
+                    await session.refresh(user)
+                # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+                
+                await redirect_to_main_menu(
+                    bot=self.bot,
+                    user=user,
+                    services=self.services,
+                    config=self.config,
+                    storage=self.storage,
+                )
 
-        locale = user.language_code if user else DEFAULT_LANGUAGE
-        with self.i18n.use_locale(locale):
-            await redirect_to_main_menu(
-                bot=self.bot,
-                user=user,
-                services=self.services,
-                config=self.config,
-                storage=self.storage,
-            )
-
-            if data.is_extend:
-                await self.services.vpn.extend_subscription(
-                    user=user,
-                    devices=data.devices,
-                    duration=data.duration,
-                )
-                logger.info(f"Subscription extended for user {user.tg_id}")
-                await self.services.notification.notify_extend_success(
-                    user_id=user.tg_id,
-                    data=data,
-                )
-            elif data.is_change:
-                await self.services.vpn.change_subscription(
-                    user=user,
-                    devices=data.devices,
-                    duration=data.duration,
-                )
-                logger.info(f"Subscription changed for user {user.tg_id}")
-                await self.services.notification.notify_change_success(
-                    user_id=user.tg_id,
-                    data=data,
-                )
-            else:
-                await self.services.vpn.create_subscription(
-                    user=user,
-                    devices=data.devices,
-                    duration=data.duration,
-                    server_id=data.server_id or None,
-                )
-                logger.info(f"Subscription created for user {user.tg_id}")
-                key = await self.services.vpn.get_key(user)
-                await self.services.notification.notify_purchase_success(
-                    user_id=user.tg_id,
-                    key=key,
-                )
+                if data.is_extend:
+                    await self.services.vpn.extend_subscription(
+                        user=user,
+                        devices=data.devices,
+                        duration=data.duration,
+                    )
+                    logger.info(f"Subscription extended for user {user.tg_id}")
+                    await self.services.notification.notify_extend_success(
+                        user_id=user.tg_id,
+                        data=data,
+                    )
+                elif data.is_change:
+                    await self.services.vpn.change_subscription(
+                        user=user,
+                        devices=data.devices,
+                        duration=data.duration,
+                    )
+                    logger.info(f"Subscription changed for user {user.tg_id}")
+                    await self.services.notification.notify_change_success(
+                        user_id=user.tg_id,
+                        data=data,
+                    )
+                else:
+                    await self.services.vpn.create_subscription(
+                        user=user,
+                        devices=data.devices,
+                        duration=data.duration,
+                        server_id=data.server_id or None,
+                    )
+                    logger.info(f"Subscription created for user {user.tg_id}")
+                    key = await self.services.vpn.get_subscription_url(user) # Используем get_subscription_url
+                    await self.services.notification.notify_purchase_success(
+                        user_id=user.tg_id,
+                        key=key,
+                    )
 
     async def _on_payment_canceled(self, payment_id: str) -> None:
         logger.info(f"Payment canceled {payment_id}")

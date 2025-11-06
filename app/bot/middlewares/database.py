@@ -43,13 +43,14 @@ class DBSessionMiddleware(BaseMiddleware):
                     )
                     logger.info(f"New user {user.tg_id} created.")
                 elif user.language_code != "ru":
-                    await User.update_language_code(session, user.tg_id, "ru")
-                    user.language_code = "ru"
+                    # Corrected line: Use User.update method
+                    await User.update(session, user.tg_id, language_code="ru") #
+                    user.language_code = "ru" # Update the local object as well
                     logger.debug(f"Updated language code to 'ru' for user {user.tg_id}")
 
                 data["user"] = user
                 data["is_new_user"] = is_new_user
-            
+
             data["session"] = session
             data["session_maker"] = self.session
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
+from contextlib import nullcontext
 
 if TYPE_CHECKING:
     from app.bot.services import VPNService
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 import logging
 
@@ -27,7 +29,7 @@ class SubscriptionService:
         self.vpn_service = vpn_service
         logger.info("Subscription Service initialized")
 
-    async def is_trial_available(self, user: User) -> bool:
+    async def is_trial_available(self, user: User, session: Optional[AsyncSession] = None) -> bool:
         is_first_check_ok = (
             self.config.shop.TRIAL_ENABLED and not user.server_id and not user.is_trial_used
         )
@@ -35,8 +37,8 @@ class SubscriptionService:
         if not is_first_check_ok:
             return False
 
-        async with self.session_factory() as session:
-            referral = await Referral.get_referral(session, user.tg_id)
+        async with (session if session else self.session_factory()) as active_session:
+            referral = await Referral.get_referral(active_session, user.tg_id)
 
         return not referral or (referral and not self.config.shop.REFERRED_TRIAL_ENABLED)
 

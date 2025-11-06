@@ -104,8 +104,8 @@ async def command_main_menu(
         reply_markup=main_menu_keyboard(
             is_admin,
             is_referral_available=config.shop.REFERRER_REWARD_ENABLED,
-            is_trial_available=await services.subscription.is_trial_available(user),
-            is_referred_trial_available=await services.referral.is_referred_trial_available(user),
+            is_trial_available=await services.subscription.is_trial_available(user, session=session),
+            is_referred_trial_available=await services.referral.is_referred_trial_available(user, session=session),
         ),
     )
     await state.update_data({MAIN_MESSAGE_ID_KEY: main_menu.message_id})
@@ -118,6 +118,7 @@ async def callback_main_menu(
     services: ServicesContainer,
     state: FSMContext,
     config: Config,
+    session: AsyncSession,
 ) -> None:
     logger.info(f"User {user.tg_id} returned to main menu page.")
     await state.clear()
@@ -128,8 +129,8 @@ async def callback_main_menu(
         reply_markup=main_menu_keyboard(
             is_admin,
             is_referral_available=config.shop.REFERRER_REWARD_ENABLED,
-            is_trial_available=await services.subscription.is_trial_available(user),
-            is_referred_trial_available=await services.referral.is_referred_trial_available(user),
+            is_trial_available=await services.subscription.is_trial_available(user, session=session),
+            is_referred_trial_available=await services.referral.is_referred_trial_available(user, session=session),
         ),
     )
 
@@ -149,23 +150,28 @@ async def redirect_to_main_menu(
             storage=storage,
             key=StorageKey(bot_id=bot.id, chat_id=user.tg_id, user_id=user.tg_id),
         )
+    
+    # При редиректе нам также нужна сессия, чтобы вызвать сервисы
+    # Мы не можем получить ее из middleware, поэтому создаем новую.
+    # Это безопасно, т.к. redirect_to_main_menu вызывается *после*
+    # завершения основного обработчика, и блокировки не будет.
+    async with services.subscription.session_factory() as session:
+        main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
+        is_admin = await IsAdmin()(user_id=user.tg_id)
 
-    main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
-    is_admin = await IsAdmin()(user_id=user.tg_id)
-
-    try:
-        await bot.edit_message_text(
-            text=_("main_menu:message:main").format(name=user.first_name),
-            chat_id=user.tg_id,
-            message_id=main_message_id,
-            reply_markup=main_menu_keyboard(
-                is_admin,
-                is_referral_available=config.shop.REFERRER_REWARD_ENABLED,
-                is_trial_available=await services.subscription.is_trial_available(user),
-                is_referred_trial_available=await services.referral.is_referred_trial_available(
-                    user
+        try:
+            await bot.edit_message_text(
+                text=_("main_menu:message:main").format(name=user.first_name),
+                chat_id=user.tg_id,
+                message_id=main_message_id,
+                reply_markup=main_menu_keyboard(
+                    is_admin,
+                    is_referral_available=config.shop.REFERRER_REWARD_ENABLED,
+                    is_trial_available=await services.subscription.is_trial_available(user, session=session),
+                    is_referred_trial_available=await services.referral.is_referred_trial_available(
+                        user, session=session
+                    ),
                 ),
-            ),
-        )
-    except Exception as exception:
-        logger.error(f"Error redirecting to main menu page: {exception}")
+            )
+        except Exception as exception:
+            logger.error(f"Error redirecting to main menu page: {exception}")

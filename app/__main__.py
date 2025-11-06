@@ -132,7 +132,7 @@ async def main() -> None:
     app["session_maker"] = db.session
     app["server_pool"] = services_container.server_pool
     app["config"] = config
-    # <-- КОНЕЦ ИЗМЕНЕНИЙ -->
+    app["services_container"] = services_container
 
     # Create the dispatcher
     dispatcher = Dispatcher(

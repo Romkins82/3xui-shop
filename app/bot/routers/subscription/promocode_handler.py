@@ -13,7 +13,7 @@ from app.bot.utils.formatting import format_subscription_period
 from app.bot.utils.navigation import NavSubscription
 from app.db.models import Promocode, User
 
-from .keyboard import promocode_keyboard, server_keyboard
+from .keyboard import multiconfig_keyboard, promocode_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router(name=__name__)
@@ -62,7 +62,7 @@ async def handle_promocode_input(
         callback_data = SubscriptionData(state=NavSubscription.PROMOCODE_SERVER, user_id=user.tg_id)
         await message.answer(
             text=_("subscription:message:server"),
-            reply_markup=server_keyboard(servers, callback_data),
+            reply_markup=multiconfig_keyboard(callback_data),
         )
 
     else:
@@ -84,21 +84,25 @@ async def callback_promocode_server_selected(
 ) -> None:
     data = await state.get_data()
     promocode_code = data.get("promocode")
-    server_id = callback_data.server_id
     
-    logger.info(f"User {user.tg_id} selected server {server_id} for promocode {promocode_code}.")
+    servers = await services.server_pool.get_available_servers()
+    if not servers:
+        await services.notification.show_popup(
+            callback=callback, text=_("promocode:ntf:no_available_servers")
+        )
+        return
+
+    server_id = servers[0].id
+    logger.info(f"User {user.tg_id} auto-selected server {server_id} for promocode {promocode_code}.")
 
     promocode = await Promocode.get(session=session, code=promocode_code)
     success = await services.vpn.activate_promocode(user=user, promocode=promocode, server_id=server_id)
     
     main_message_id = await state.get_value(MAIN_MESSAGE_ID_KEY)
     
-    # We need to edit the main menu message, not the server selection message
-    # Let's delete the server selection message first
     await callback.message.delete()
 
     if success:
-        # And now edit the main menu message
         await callback.bot.edit_message_text(
             text=_("promocode:message:activated_success").format(
                 promocode=promocode_code,
@@ -106,11 +110,10 @@ async def callback_promocode_server_selected(
             ),
             chat_id=callback.message.chat.id,
             message_id=main_message_id,
-            reply_markup=promocode_keyboard(), # Or another appropriate keyboard
+            reply_markup=promocode_keyboard(),
         )
     else:
         text = _("promocode:ntf:activate_failed")
-        # Since we deleted the callback message, we need to send a new one
         await callback.message.answer(text=text)
 
     await state.set_state(None)

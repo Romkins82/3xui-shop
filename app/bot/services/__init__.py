@@ -1,5 +1,7 @@
+# app/bot/services/__init__.py
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from typing import Optional # Добавить Optional
 
 from app.bot.models import ServicesContainer
 from app.config import Config
@@ -19,9 +21,15 @@ async def initialize(
     session: async_sessionmaker,
     bot: Bot,
 ) -> ServicesContainer:
-    server_pool = ServerPoolService(config=config, session=session)
+    # Инициализируем VPNService *перед* ServerPoolService
+    vpn = VPNService(config=config, session=session, server_pool_service=None) # Пока None
+    # Теперь передаем vpn_service в ServerPoolService
+    server_pool = ServerPoolService(config=config, session=session, vpn_service=vpn)
+    # И теперь устанавливаем server_pool_service в уже созданный vpn_service
+    vpn.server_pool_service = server_pool
+    # server_pool.set_vpn_service(vpn) # Альтернативный вариант через set_vpn_service
+
     plan = PlanService()
-    vpn = VPNService(config=config, session=session, server_pool_service=server_pool)
     notification = NotificationService(config=config, bot=bot)
     referral = ReferralService(config=config, session_factory=session, vpn_service=vpn)
     subscription = SubscriptionService(config=config, session_factory=session, vpn_service=vpn)
