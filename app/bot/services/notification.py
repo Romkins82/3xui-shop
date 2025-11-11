@@ -15,8 +15,10 @@ from aiogram.utils.i18n import gettext as _
 from aiogram.utils.i18n import lazy_gettext as __
 
 from app.bot.models.subscription_data import SubscriptionData
-from app.bot.routers.misc.keyboard import close_notification_keyboard
-from app.bot.routers.subscription.keyboard import payment_success_keyboard
+from app.bot.routers.misc.keyboard import (
+    close_notification_keyboard,
+    payment_success_keyboard,
+)
 from app.bot.utils.constants import MESSAGE_EFFECT_IDS
 from app.bot.utils.formatting import format_device_count, format_subscription_period
 from app.config import Config

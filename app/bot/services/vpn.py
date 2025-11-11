@@ -1,25 +1,26 @@
+# app/bot/services/vpn.py
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .server_pool import ServerPoolService
-
 import logging
+import uuid
+from typing import TYPE_CHECKING, Optional 
+from contextlib import nullcontext 
 
 from py3xui import Client, Inbound
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker 
 
 from app.bot.models import ClientData
 from app.bot.utils.formatting import format_remaining_time
-from app.bot.utils.network import extract_base_url
 from app.bot.utils.time import (
     add_days_to_timestamp,
     days_to_timestamp,
     get_current_timestamp,
 )
 from app.config import Config
-from app.db.models import Promocode, User, Server
+from app.db.models import User, Promocode
+
+if TYPE_CHECKING:
+    from .server_pool import Connection, ServerPoolService 
 
 logger = logging.getLogger(__name__)
 
@@ -36,383 +37,459 @@ class VPNService:
         self.server_pool_service = server_pool_service
         logger.info("VPN Service initialized.")
 
-    async def is_client_exists(self, user: User) -> Client | None:
-        connection = await self.server_pool_service.get_connection(user)
-        if not connection:
-            return None
+    async def _find_client_on_server(self, user: User, connection: Connection) -> Client | None: # Уточнен тип connection
+        """
+        Надежный метод для поиска клиента (КОНФИГУРАЦИИ) на конкретном сервере.
+        Итерирует по всем клиентам всех инбаундов.
+        ВНИМАНИЕ: Этот метод возвращает объект КОНФИГА, а не СТАТИСТИКИ.
+        """
         try:
-            # Try to get the client by email, which might fail if the library is buggy
-            client = await connection.api.client.get_by_email(str(user.tg_id))
-            if client:
-                logger.debug(f"Client {user.tg_id} exists on server {connection.server.name}.")
-                return client
-        except ValueError as e:
-            # If it fails with a known error, try to find the client by iterating through inbounds
-            if "Inbound Not Found For Email" in str(e):
-                logger.debug(f"Client {user.tg_id} not found by email without inbound_id. Trying with inbounds.")
-                try:
-                    inbounds = await connection.api.inbound.get_list()
-                    for inbound in inbounds:
-                        try:
-                            client = await connection.api.client.get_by_email(str(user.tg_id), inbound_id=inbound.id)
-                            if client:
-                                logger.debug(f"Client {user.tg_id} found in inbound {inbound.id}")
-                                return client
-                        except Exception:  # Broadened exception to catch any error during iteration
-                            continue # Not in this inbound
-                except Exception as e_inbound:
-                    logger.error(f"Error while searching client in inbounds: {e_inbound}", exc_info=True)
-            else:
-                logger.warning(f"Could not check if client exists for user {user.tg_id} due to unexpected error: {e}")
-        
-        logger.warning(f"Client {user.tg_id} not found on server {connection.server.name}.")
+            inbounds = await connection.api.inbound.get_list()
+            for inbound in inbounds:
+                if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
+                    for client in inbound.settings.clients:
+                        if client.email == str(user.tg_id):
+                            logger.debug(f"Client (config) {user.tg_id} found on server {connection.server.name} in inbound {inbound.id}")
+                            client.inbound_id = inbound.id
+                            return client
+        except Exception as e:
+            logger.error(f"Error while searching for client (config) {user.tg_id} on server {connection.server.name}: {e}")
         return None
 
-    async def get_limit_ip(self, user: User, client: Client) -> int | None:
-        connection = await self.server_pool_service.get_connection(user)
+    async def is_client_exists(self, user: User, session: Optional[AsyncSession] = None) -> Client | None: # Добавлен session
+        """Проверяет наличие клиента (КОНФИГУРАЦИИ) хотя бы на одном из серверов."""
+        use_session = session if session else self.session()
+        _session_context = use_session if not session else nullcontext(use_session)
+
+        async with _session_context as active_session: # Используем async with для сессии
+            servers = await self.server_pool_service.get_all_servers(session=active_session) # Передаем сессию
+            for server in servers:
+                connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=active_session) # Передаем сессию
+                if not connection:
+                    continue
+                client = await self._find_client_on_server(user, connection)
+                if client:
+                    return client
+
+        logger.warning(f"Client (config) {user.tg_id} not found on any server.")
+        return None
+
+    async def get_limit_ip(self, user: User, client: Client, session: Optional[AsyncSession] = None) -> int | None: # Добавлен session
+        """
+        Находит limit_ip для клиента (по email) на любом сервере, где он есть.
+        Используется в админ-панели для смены локации.
+        """
+        connection = await self.server_pool_service.get_connection(user, session=session) # Передаем сессию
         if not connection:
-            return None
+            servers = await self.server_pool_service.get_all_servers(session=session) # Передаем сессию
+            if not servers: return None
+            # Пытаемся найти на любом сервере
+            for server in servers:
+                connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=session)
+                if connection:
+                    break # Нашли первое доступное соединение
+            if not connection:
+                 logger.error(f"Не удалось найти ни одного живого сервера для get_limit_ip (user: {user.tg_id})")
+                 return None
+
         try:
             inbounds: list[Inbound] = await connection.api.inbound.get_list()
         except Exception as exception:
             logger.error(f"Failed to fetch inbounds: {exception}")
             return None
+
         for inbound in inbounds:
-            if hasattr(inbound.settings, 'clients'):
+            if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
                 for inbound_client in inbound.settings.clients:
-                    if inbound_client.email == client.email:
-                        logger.debug(f"Client {client.email} limit ip: {inbound_client.limit_ip}")
+                    # Сравниваем по email (tg_id)
+                    if inbound_client.email == str(user.tg_id):
+                        logger.debug(f"Client {user.tg_id} limit ip: {inbound_client.limit_ip}")
                         return inbound_client.limit_ip
-        logger.critical(f"Client {client.email} not found in inbounds.")
+
+        logger.critical(f"Client {user.tg_id} not found in inbounds on server {connection.server.name} (get_limit_ip).")
         return None
 
-    async def get_client_data(self, user: User) -> ClientData | None:
-        logger.debug(f"Starting to retrieve client data for {user.tg_id}.")
-        connection = await self.server_pool_service.get_connection(user)
-        if not connection:
-            return None
-        try:
-            client = await self.is_client_exists(user) # Use the corrected is_client_exists
-            if not client:
-                logger.critical(f"Client {user.tg_id} not found on server {connection.server.name}.")
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ (SyntaxError) ---
+    async def get_client_data(self, user: User, session: Optional[AsyncSession] = None) -> ClientData | None:
+        logger.debug(f"Начинаем АГРЕГИРОВАННОЕ извлечение данных клиента для {user.tg_id}.")
+
+        try: # <--- ДОБАВЛЕН БЛОК TRY
+            total_up: int = 0
+            total_down: int = 0
+            
+            # Настройки подписки (должны быть одинаковы на всех серверах)
+            max_devices: int | None = None
+            traffic_total: int | None = None
+            expiry_time: int | None = None
+            
+            use_session = session if session else self.session()
+            _session_context = use_session if not session else nullcontext(use_session)
+
+            async with _session_context as active_session:
+                servers = await self.server_pool_service.get_all_servers(session=active_session)
+                if not servers:
+                    logger.warning(f"Нет серверов в пуле для получения данных {user.tg_id}")
+                    return None
+
+                for server in servers:
+                    connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=active_session)
+                    if not connection or not connection.server.online:
+                        logger.debug(f"Сервер {server.name} оффлайн или недоступен, пропускаем.")
+                        continue
+
+                    try:
+                        inbounds = await connection.api.inbound.get_list()
+                        if not inbounds:
+                            logger.warning(f"Нет инбаундов на сервере {connection.server.name}, пропускаем.")
+                            continue
+                        
+                        for inbound in inbounds:
+                            # 1. Ищем статистику
+                            if hasattr(inbound, 'client_stats') and inbound.client_stats:
+                                for stat in inbound.client_stats:
+                                    if stat.email == str(user.tg_id):
+                                        logger.debug(f"Найдена статистика для {user.tg_id} на {server.name}: up={stat.up}, down={stat.down}")
+                                        total_up += stat.up
+                                        total_down += stat.down
+                                        
+                                        # 2. Если это первый раз, когда мы нашли пользователя,
+                                        #    берем его настройки (лимиты, срок)
+                                        if max_devices is None:
+                                            logger.debug(f"Получаем настройки подписки для {user.tg_id} с сервера {server.name}")
+                                            traffic_total = stat.total
+                                            expiry_time = -1 if stat.expiry_time == 0 else stat.expiry_time
+                                            
+                                            # Ищем конфиг этого же клиента, чтобы взять limit_ip
+                                            if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
+                                                for config in inbound.settings.clients:
+                                                    if config.email == str(user.tg_id):
+                                                        limit_ip = config.limit_ip if config else 0
+                                                        max_devices = -1 if limit_ip == 0 else limit_ip
+                                                        break # Нашли конфиг
+                                            
+                                            if max_devices is None: # Если вдруг не нашли конфиг
+                                                logger.warning(f"Не удалось найти конфиг для {user.tg_id} на {server.name}, limit_ip будет 0")
+                                                max_devices = 0 # Ставим 0 (безлимит) по умолчанию
+
+                                        break # Нашли статистику в этом инбаунде, идем к следующему
+                            
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении данных с сервера {server.name} для {user.tg_id}: {e}")
+                
+                # --- Конец цикла по серверам ---
+
+            # 3. Собираем финальный ClientData
+            if max_devices is None:
+                # Пользователь не найден ни на одном сервере
+                logger.warning(f"Пользователь {user.tg_id} не найден ни на одном из {len(servers)} серверов.")
                 return None
-            limit_ip = await self.get_limit_ip(user=user, client=client)
-            max_devices = -1 if limit_ip == 0 else limit_ip
-            traffic_total = client.total
-            expiry_time = -1 if client.expiry_time == 0 else client.expiry_time
-            if traffic_total <= 0:
+
+            traffic_used = total_up + total_down
+            
+            # Приводим к единому формату
+            if traffic_total is None or traffic_total <= 0:
                 traffic_remaining = -1
-                traffic_total = -1
+                traffic_total = -1 # -1 для "безлимита"
             else:
-                traffic_remaining = client.total - (client.up + client.down)
-            traffic_used = client.up + client.down
+                traffic_remaining = traffic_total - traffic_used
+                if traffic_remaining < 0:
+                    traffic_remaining = 0
+            
+            if expiry_time is None:
+                expiry_time = -1
+
             client_data = ClientData(
                 max_devices=max_devices,
                 traffic_total=traffic_total,
                 traffic_remaining=traffic_remaining,
-                traffic_used=traffic_used,
-                traffic_up=client.up,
-                traffic_down=client.down,
+                traffic_used=traffic_used,       # <-- Агрегированная сумма
+                traffic_up=total_up,           # <-- Агрегированная сумма
+                traffic_down=total_down,       # <-- Агрегированная сумма
                 expiry_timestamp=expiry_time,
                 expiry_time_str=format_remaining_time(expiry_time),
             )
-            logger.debug(f"Successfully retrieved client data for {user.tg_id}: {client_data}.")
+            logger.debug(f"Успешно получены АГРЕГИРОВАННЫЕ данные клиента для {user.tg_id}: {client_data}.")
             return client_data
-        except Exception as exception:
-            logger.error(f"Error retrieving client data for {user.tg_id}: {exception}")
+
+        except Exception as exception: # <--- ЭТОТ БЛОК ТЕПЕРЬ НА СВОЕМ МЕСТЕ
+            logger.error(f"Ошибка при АГРЕГИРОВАННОЙ обработке данных клиента для {user.tg_id}: {exception}", exc_info=True)
+            return None
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ (SyntaxError) ---
+
+
+    async def get_subscription_url(self, user: User) -> str | None:
+        if not user.vpn_id:
+            logger.warning(f"User {user.tg_id} has no vpn_id to generate subscription URL.")
             return None
 
-    async def get_key(self, user: User) -> str | None:
+        sub_url = f"{self.config.bot.DOMAIN}/sub/{user.vpn_id}"
+        logger.debug(f"Generated subscription URL for {user.tg_id}: {sub_url}")
+        return sub_url
+
+    async def _perform_action_on_all_servers(self, user: User, action: str, **kwargs) -> tuple[int, int | None]:
+        # Используем сессию по умолчанию, так как этот метод вызывается из других, уже имеющих сессию
         async with self.session() as session:
-            user = await User.get(session=session, tg_id=user.tg_id)
-        if not user.server_id:
-            logger.debug(f"Server ID for user {user.tg_id} not found.")
-            return None
-        subscription = extract_base_url(
-            url=user.server.host,
-            port=self.config.xui.SUBSCRIPTION_PORT,
-            path=self.config.xui.SUBSCRIPTION_PATH,
-        )
-        key = f"{subscription}{user.vpn_id}"
-        logger.debug(f"Fetched key for {user.tg_id}: {key}.")
-        return key
+            servers = await self.server_pool_service.get_all_servers(session=session)
+            if not servers:
+                logger.error(f"No servers available to perform '{action}' for user {user.tg_id}.")
+                return 0, None
 
-    async def create_client(
-        self,
-        user: User,
-        devices: int,
-        duration: int,
-		server_id: int | None = None,
-        enable: bool = True,
-        flow: str = "xtls-rprx-vision",
-        total_gb: int = 0,
-        **kwargs
-    ) -> User | None:
-        location_name = kwargs.get("location_name")
-        session = kwargs.get("session")
+            successful_ops = 0
+            first_success_server_id = None
 
-        logger.info(f"Creating new client for user {user.tg_id} | {devices} devices, {duration} days.")
+            for server in servers:
+                connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=session)
+                if not connection:
+                    logger.warning(f"No connection for server {server.name}, skipping action '{action}'.")
+                    continue
 
-        assigned_server = None
-        if server_id:
-            async with self.session() as temp_session:
-                server = await Server.get_by_id(temp_session, server_id)
-                # Повторная проверка прямо перед созданием клиента
-                if server and server.online and server.current_clients < server.max_clients:
-                    assigned_server = server
-                else:
-                    logger.warning(
-                        f"Server {server_id} is full or offline at the time of client creation for user {user.tg_id}. Trying to find a fallback."
-                    )
-                    # В качестве запасного варианта, ищем любой другой доступный сервер
-                    assigned_server = await self.server_pool_service.get_available_server()
-        elif location_name:
-            assigned_server = await self.server_pool_service.get_available_server_by_location(location_name)
-        else:
-             assigned_server = await self.server_pool_service.get_available_server()
+                try:
+                    client_exists = await self._find_client_on_server(user, connection)
 
-        if not assigned_server:
-            logger.error(f"No available server found to create client for user {user.tg_id}.")
-            return None
-        user.server_id = assigned_server.id
+                    if action == 'create':
+                        if client_exists:
+                            logger.warning(f"Client {user.tg_id} already exists on {server.name}. Forcing update.")
+                            update_payload = kwargs['client_settings']
+                            await connection.api.client.update(client_uuid=client_exists.sub_id, client=update_payload)
+                        else:
+                            inbound_id = await self.server_pool_service.get_inbound_id(connection.api)
+                            if not inbound_id:
+                                raise Exception("No inbound ID found")
+                            await connection.api.client.add(inbound_id=inbound_id, clients=[kwargs['client_settings']])
 
-        connection = await self.server_pool_service.get_connection(user)
-        if not connection:
-            return None
+                    elif action == 'update':
+                        if client_exists:
+                            update_payload = kwargs['update_payload_func'](client_exists)
+                            await connection.api.client.update(client_uuid=client_exists.sub_id, client=update_payload)
+                        else:
+                            logger.warning(f"Client {user.tg_id} not found on {server.name} to update. Creating it instead.")
+                            inbound_id = await self.server_pool_service.get_inbound_id(connection.api)
+                            if not inbound_id: raise Exception("No inbound ID for creation during update")
+                            # Создаем настройки из функции обновления, но для НОВОГО клиента
+                            client_settings = kwargs['update_payload_func'](Client(email=str(user.tg_id)))
+                            # Устанавливаем ID и sub_id из пользователя
+                            client_settings.id = user.vpn_id
+                            client_settings.sub_id = user.vpn_id
+                            await connection.api.client.add(inbound_id=inbound_id, clients=[client_settings])
 
-        import uuid
-        user.vpn_id = user.vpn_id or str(uuid.uuid4())
-        
-        new_client = Client(
+                    elif action == 'delete':
+                        if client_exists:
+                            if not hasattr(client_exists, 'inbound_id') or not client_exists.inbound_id:
+                                raise Exception("Cannot delete client: inbound_id is missing.")
+                            await connection.api.client.delete(inbound_id=client_exists.inbound_id, client_uuid=client_exists.sub_id)
+                        else:
+                            logger.warning(f"Client {user.tg_id} not found on {server.name}, skipping delete (already deleted).")
+
+                    logger.info(f"Action '{action}' for user {user.tg_id} on server {server.name} successful.")
+                    successful_ops += 1
+                    if not first_success_server_id:
+                        first_success_server_id = server.id
+                except Exception as e:
+                    logger.error(f"Action '{action}' for user {user.tg_id} on server {server.name} failed: {e}")
+
+            return successful_ops, first_success_server_id
+
+    async def create_client(self, user: User, devices: int, duration: int, **kwargs) -> User | None:
+        """
+        Создает клиента на всех серверах и возвращает обновленный объект User с vpn_id.
+        """
+        temp_vpn_id = str(uuid.uuid4())
+        client_settings = Client(
             email=str(user.tg_id),
-            enable=enable,
-            id=user.vpn_id,
+            enable=True,
+            id=temp_vpn_id,
             expiry_time=days_to_timestamp(duration) if duration > 0 else 0,
-            flow=flow,
+            flow="xtls-rprx-vision",
             limit_ip=devices,
-            sub_id=user.vpn_id,
-            total_gb=total_gb,
+            sub_id=temp_vpn_id,
+            total_gb=0,
         )
-        inbound_id = await self.server_pool_service.get_inbound_id(connection.api)
-        try:
-            # If user doesn't exist in bot's DB, create it.
-            async with self.session() as manage_user_session:
-                if not await User.exists(manage_user_session, tg_id=user.tg_id):
-                    await User.create(
-                        session=manage_user_session,
-                        tg_id=user.tg_id,
-                        first_name=user.first_name,
-                        username=user.username,
-                        server_id=user.server_id,
-                        vpn_id=user.vpn_id
-                    )
-                else: # update server_id and vpn_id if user exists
-                    await User.update(
-                        session=manage_user_session,
-                        tg_id=user.tg_id,
-                        server_id=user.server_id,
-                        vpn_id=user.vpn_id
-                    )
 
-            await connection.api.client.add(inbound_id=inbound_id, clients=[new_client])
-            logger.info(f"Successfully created client for {user.tg_id} on server {connection.server.name}")
-            return user
-        except Exception as exception:
-            logger.error(f"Error creating client for {user.tg_id}: {exception}")
+        successful_creations, first_server_id = await self._perform_action_on_all_servers(
+            user, 'create', client_settings=client_settings
+        )
+
+        if successful_creations > 0:
+            async with self.session() as session:
+                # Получаем реальный vpn_id после создания
+                connection = await self.server_pool_service.get_connection_by_server_id(first_server_id, session=session)
+                if not connection:
+                    logger.error(f"Failed to get connection for server {first_server_id} to retrieve real vpn_id after creation.")
+                    return None
+
+                created_client = await self._find_client_on_server(user, connection)
+                if not created_client or not hasattr(created_client, 'sub_id'):
+                    logger.error(f"Could not find the client {user.tg_id} on server after creation to get real vpn_id.")
+                    return None
+
+                real_vpn_id = created_client.sub_id
+                logger.info(f"Client for user {user.tg_id} created. Real vpn_id is {real_vpn_id}")
+
+                # Обновляем или создаем пользователя в БД
+                user_in_db = await User.get(session, tg_id=user.tg_id)
+                if not user_in_db:
+                    user_in_db = await User.create(
+                        session=session, tg_id=user.tg_id, first_name=user.first_name,
+                        username=user.username, server_id=first_server_id, vpn_id=real_vpn_id,
+                        language_code=user.language_code # Сохраняем язык
+                    )
+                else:
+                    await User.update(
+                        session=session, tg_id=user.tg_id,
+                        server_id=first_server_id, vpn_id=real_vpn_id
+                    )
+                    await session.refresh(user_in_db) # Обновляем объект user_in_db
+
+                # Возвращаем обновленный объект пользователя из БД
+                return user_in_db if user_in_db else None
+        else:
+            logger.error(f"Failed to create client {user.tg_id} on any server.")
             return None
 
-    async def update_client(
-        self,
-        user: User,
-        devices: int = -1,
-        duration: int = -1,
-        replace_devices: bool = False,
-        replace_duration: bool = False,
-        enable: bool = True,
-        flow: str = "xtls-rprx-vision",
-        total_gb: int = 0,
-    ) -> bool:
-        logger.info(f"Updating client {user.tg_id} | devices={devices}, duration={duration}, replace_devices={replace_devices}, replace_duration={replace_duration}")
-        connection = await self.server_pool_service.get_connection(user)
-        if not connection:
-            return False
-        try:
-            client = await self.is_client_exists(user)
-            if client is None:
-                logger.critical(f"Client {user.tg_id} not found for update.")
-                return False
 
-            if devices != -1:
-                if not replace_devices:
-                    current_device_limit = await self.get_limit_ip(user=user, client=client)
-                    client.limit_ip = (current_device_limit or 0) + devices
-                else:
-                    client.limit_ip = devices
-            
-            if duration != -1:
-                if duration == 0: # Set to unlimited
-                    client.expiry_time = 0
-                else:
+    async def update_client(self, user: User, **kwargs) -> bool:
+        def update_payload_func(client: Client) -> Client:
+            # Используем get() для безопасного доступа к kwargs
+            if 'devices' in kwargs:
+                # limit_ip = 0 means unlimited
+                client.limit_ip = kwargs.get('devices', 0) if kwargs.get('devices', 0) >= 0 else 0
+            if 'duration' in kwargs:
+                duration = kwargs.get('duration', 0)
+                if duration == 0:
+                    client.expiry_time = 0 # 0 means unlimited expiry
+                elif duration > 0:
+                    replace = kwargs.get('replace_duration', False)
                     current_time = get_current_timestamp()
-                    if not replace_duration:
-                        expiry_time_to_use = max(client.expiry_time, current_time)
-                    else:
-                        expiry_time_to_use = current_time
-                    client.expiry_time = add_days_to_timestamp(timestamp=expiry_time_to_use, days=duration)
-            
-            client.enable = enable
-            client.flow = flow
-            client.total_gb = total_gb
-            
-            client_uuid_for_update = client.sub_id
-            client.id = client_uuid_for_update
+                    # Если expiry_time None или 0, считаем его как current_time
+                    base_expiry = client.expiry_time if client.expiry_time and client.expiry_time > 0 else current_time
+                    expiry_to_use = current_time if replace else max(base_expiry, current_time)
+                    client.expiry_time = add_days_to_timestamp(expiry_to_use, duration)
+            if 'enable' in kwargs:
+                client.enable = kwargs.get('enable', True)
 
-            await connection.api.client.update(client_uuid=client_uuid_for_update, client=client)
-            logger.info(f"Client {user.tg_id} updated successfully.")
-            return True
-        except Exception as exception:
-            logger.error(f"Error updating client {user.tg_id}: {exception}", exc_info=True)
+            # --- ВАЖНО: Устанавливаем ID и sub_id ---
+            client.id = user.vpn_id
+            client.sub_id = user.vpn_id
+            # --- ---
+
+            return client
+
+        successful_updates, _ = await self._perform_action_on_all_servers(
+            user, 'update', update_payload_func=update_payload_func
+        )
+        return successful_updates > 0
+
+    async def delete_client(self, user: User) -> bool:
+        successful_deletions, _ = await self._perform_action_on_all_servers(user, 'delete')
+        # Дополнительно очищаем server_id и vpn_id в БД
+        if successful_deletions > 0:
+            async with self.session() as session:
+                
+                # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                # Мы не можем установить vpn_id в None из-за ограничения 'NOT NULL'
+                # Вместо этого мы генерируем новый UUID, чтобы "отвязать" пользователя от старого.
+                new_vpn_id = str(uuid.uuid4())
+                await User.update(session, tg_id=user.tg_id, server_id=None, vpn_id=new_vpn_id)
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+                
+            logger.info(f"Cleared server_id and reset vpn_id for user {user.tg_id} in DB after deletion.")
+        return successful_deletions > 0
+
+    async def ensure_client_exists_on_server(self, user: User, server_id: int, session: AsyncSession) -> bool:
+        """
+        Проверяет наличие клиента на конкретном сервере и создает его, если он отсутствует.
+        Использует текущие данные клиента с другого сервера, если возможно.
+        """
+        connection = await self.server_pool_service.get_connection_by_server_id(server_id, session=session)
+        if not connection:
+            logger.error(f"Cannot ensure client {user.tg_id} exists on server {server_id}: Connection failed.")
             return False
 
-    async def create_subscription(self, user: User, devices: int, duration: int, server_id: int | None = None) -> bool:
-        if not await self.is_client_exists(user):
-            created_user = await self.create_client(user=user, devices=devices, duration=duration, server_id=server_id)
-            return created_user is not None
-        return False
+        # 1. Проверяем, существует ли клиент
+        existing_client = await self._find_client_on_server(user, connection)
+        if existing_client:
+            logger.debug(f"Client {user.tg_id} already exists on server {connection.server.name}. Skipping creation.")
+            return True
+
+        logger.info(f"Client {user.tg_id} not found on server {connection.server.name}. Attempting to create...")
+
+        # 2. Получаем актуальные данные клиента (с любого сервера, где он есть)
+        client_data = await self.get_client_data(user, session=session)
+        if not client_data:
+            logger.warning(f"Could not fetch current data for client {user.tg_id} to create on server {server_id}. Skipping.")
+            return False # Пропускаем создание, если не смогли получить данные
+
+        # 3. Готовим настройки для создания
+        if not user.vpn_id:
+             logger.error(f"Cannot create client {user.tg_id} on server {server_id}: user.vpn_id is missing.")
+             return False
+
+        # Конвертируем ClientData обратно в параметры для py3xui Client
+        devices_for_creation = 0 if client_data.max_devices == "-1" or client_data.max_devices == "∞" else int(client_data.max_devices)
+        expiry_for_creation = 0 if client_data.expiry_timestamp == -1 else client_data.expiry_timestamp
+        is_enabled = expiry_for_creation == 0 or expiry_for_creation > get_current_timestamp() # Включаем, если подписка бессрочная или не истекла
+
+        client_settings = Client(
+            email=str(user.tg_id),
+            enable=is_enabled,
+            id=user.vpn_id, # Используем существующий ID!
+            expiry_time=expiry_for_creation,
+            flow="xtls-rprx-vision", # Можно взять из конфига или оставить значение по умолчанию
+            limit_ip=devices_for_creation,
+            sub_id=user.vpn_id, # Используем существующий ID!
+            total_gb=0, # total_gb из client_data обычно не используется для создания
+        )
+
+        # 4. Создаем клиента на ЭТОМ сервере
+        try:
+            inbound_id = await self.server_pool_service.get_inbound_id(connection.api)
+            if not inbound_id:
+                raise Exception(f"No inbound ID found on server {server_id}")
+
+            await connection.api.client.add(inbound_id=inbound_id, clients=[client_settings])
+            logger.info(f"Successfully created client {user.tg_id} (vpn_id: {user.vpn_id}) on server {connection.server.name} ({server_id}).")
+            # Увеличиваем счетчик клиентов на сервере в пуле (если нужно, но _add_server/refresh_server должны это делать)
+            # connection.server.users.append(user) # Не лучший способ, лучше обновить из БД
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create client {user.tg_id} on server {server_id}: {e}")
+            return False
+
+    async def create_subscription(self, user: User, devices: int, duration: int, **kwargs) -> bool:
+        created_user = await self.create_client(user, devices, duration)
+        return created_user is not None
 
     async def extend_subscription(self, user: User, devices: int, duration: int) -> bool:
-        return await self.update_client(
-            user=user,
-            devices=devices,
-            duration=duration,
-            replace_devices=True,
-        )
+        return await self.update_client(user, devices=devices, duration=duration, replace_duration=False)
 
     async def change_subscription(self, user: User, devices: int, duration: int) -> bool:
-        if await self.is_client_exists(user):
-            return await self.update_client(
-                user,
-                devices,
-                duration,
-                replace_devices=True,
-                replace_duration=True,
-            )
-        return False
+        return await self.update_client(user, devices=devices, duration=duration, replace_duration=True)
 
-    async def process_bonus_days(self, user: User, duration: int, devices: int, server_id: int | None = None) -> bool:
-        if await self.is_client_exists(user):
-            updated = await self.update_client(user=user, devices=0, duration=duration, replace_devices=False)
-            if updated:
-                logger.info(f"Updated client {user.tg_id} with additional {duration} days(-s).")
-                return True
+    async def process_bonus_days(self, user: User, duration: int, devices: int, **kwargs) -> bool:
+        if await self.is_client_exists(user): # is_client_exists использует свою сессию
+            return await self.update_client(user, duration=duration, replace_duration=False)
         else:
-            created = await self.create_client(user=user, devices=devices, duration=duration, server_id=server_id)
-            if created:
-                logger.info(f"Created client {user.tg_id} with additional {duration} days(-s)")
-                return True
-        return False
+            created_user = await self.create_client(user, devices=devices, duration=duration)
+            return created_user is not None
 
-    async def activate_promocode(self, user: User, promocode: Promocode, server_id: int | None = None) -> bool:
+    async def activate_promocode(self, user: User, promocode: Promocode, **kwargs) -> bool:
         async with self.session() as session:
-            activated = await Promocode.set_activated(
-                session=session,
-                code=promocode.code,
-                user_id=user.tg_id,
-            )
-        if not activated:
-            logger.critical(f"Failed to activate promocode {promocode.code} for user {user.tg_id}.")
-            return False
-        logger.info(f"Begun applying promocode ({promocode.code}) to a client {user.tg_id}.")
-        success = await self.process_bonus_days(
-            user,
-            duration=promocode.duration,
-            devices=self.config.shop.BONUS_DEVICES_COUNT,
-            server_id=server_id,
-        )
-        if success:
-            return True
+            activated = await Promocode.set_activated(session=session, code=promocode.code, user_id=user.tg_id)
+        if not activated: return False
+
+        success = await self.process_bonus_days(user, promocode.duration, self.config.shop.BONUS_DEVICES_COUNT)
+        if success: return True
+
         async with self.session() as session:
             await Promocode.set_deactivated(session=session, code=promocode.code)
-        logger.warning(f"Promocode {promocode.code} not activated due to failure.")
         return False
 
     async def enable_client(self, user: User) -> bool:
-        return await self.update_client(user, enable=True, replace_devices=False)
+        return await self.update_client(user, enable=True)
 
     async def disable_client(self, user: User) -> bool:
-        return await self.update_client(user, enable=False, replace_devices=False)
+        return await self.update_client(user, enable=False)
 
-    async def delete_client(self, user: User) -> bool:
-        logger.info(f"Deleting client {user.tg_id}")
-        connection = await self.server_pool_service.get_connection(user)
-        if not connection:
-            return False
-
-        try:
-            inbounds = await connection.api.inbound.get_list()
-            if not inbounds:
-                logger.warning(f"No inbounds found on server {connection.server.name}")
-                return False
-
-            client_uuid_to_delete = None
-            inbound_id_for_client = None
-
-            # Find the client and the inbound it belongs to
-            for inbound in inbounds:
-                if inbound.settings and hasattr(inbound.settings, 'clients'):
-                    for client_setting in inbound.settings.clients:
-                        if client_setting.email == str(user.tg_id):
-                            client_uuid_to_delete = client_setting.id
-                            inbound_id_for_client = inbound.id
-                            break
-                if client_uuid_to_delete:
-                    break
-            
-            if not client_uuid_to_delete or not inbound_id_for_client:
-                logger.warning(f"Client {user.tg_id} not found on server {connection.server.name} in any inbound. Considering as success.")
-                return True # If not found, it's already "deleted"
-
-            # Use the found client UUID and inbound ID to delete
-            await connection.api.client.delete(inbound_id=inbound_id_for_client, client_uuid=client_uuid_to_delete)
-            
-            logger.info(f"Successfully deleted client {user.tg_id} from server {connection.server.name}")
-            return True
-        except ValueError as e:
-            if "Client Not Found" in str(e):
-                 logger.warning(f"Client {user.tg_id} was not found on the server, likely already deleted. Considering as success.")
-                 return True
-            logger.error(f"Error deleting client {user.tg_id}: {e}", exc_info=True)
-            return False
-        except Exception as e:
-            logger.error(f"An unexpected error occurred while deleting client {user.tg_id}: {e}", exc_info=True)
-            return False
-
-    async def change_client_location(self, user: User, new_location_name: str, current_devices: int, session: AsyncSession) -> bool:
-        logger.info(f"Changing location for user {user.tg_id} to {new_location_name}")
-        client_data = await self.get_client_data(user)
-        if not client_data:
-            logger.error(f"Failed to get current client data for {user.tg_id}")
-            return False
-
-        if not await self.delete_client(user):
-            logger.error(f"Failed to delete client from old server for user {user.tg_id}")
-            return False
-
-        new_server = await self.server_pool_service.get_available_server_by_location(new_location_name)
-        if not new_server:
-            logger.error(f"No available servers found in location {new_location_name}")
-            return False
-        
-        user.server_id = new_server.id
-        await User.update(session=session, tg_id=user.tg_id, server_id=new_server.id)
-        
-        remaining_days = 0
-        if not client_data.has_subscription_expired and client_data.expiry_timestamp != -1:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc)
-            expiry_dt = datetime.fromtimestamp(client_data.expiry_timestamp / 1000, timezone.utc)
-            remaining_days = (expiry_dt - now).days
-            if remaining_days < 0: remaining_days = 0
-        
-        created_user = await self.create_client(user=user, devices=current_devices, duration=remaining_days)
-        return created_user is not None
+    async def change_client_location(self, user: User, **kwargs) -> bool:
+        logger.warning("change_client_location has no effect in aggregated mode.")
+        return True

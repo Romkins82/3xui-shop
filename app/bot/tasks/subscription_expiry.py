@@ -31,14 +31,25 @@ async def notify_users_with_expiring_subscription(
             user_notified_key = f"user:notified:{user.tg_id}"
 
             # Check if user was recently notified
-            if await redis.get(user_notified_key):
+            if await redis.get(user_notified_key) and user.server_id is not None:
                 continue
 
-            client_data = await vpn_service.get_client_data(user)
+            client_data = await vpn_service.get_client_data(user, session=session)
 
             # Skip if no client data or subscription is unlimited
             if not client_data or client_data.expiry_timestamp == -1:
                 continue
+
+            # --- НАЧАЛО ИЗМЕНЕНИЯ ---
+            if client_data.has_subscription_expired:
+                # If expired, check if they still have a server_id in the bot's DB
+                if user.server_id is not None:
+                    logger.info(f"[Background task] User {user.tg_id}'s subscription is expired. Clearing server_id.")
+                    # We clear server_id to free up a slot on the server (in the bot's count)
+                    await User.update(session=session, tg_id=user.tg_id, server_id=None)
+                    await redis.delete(user_notified_key) # Clear notification key
+                continue # Move to next user
+            # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
             now = datetime.now(timezone.utc)
             expiry_datetime = datetime.fromtimestamp(

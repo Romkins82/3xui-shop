@@ -95,7 +95,10 @@ async def callback_platform(
     config: Config,
 ) -> None:
     logger.info(f"User {user.tg_id} selected platform: {callback.data}")
-    key = await services.vpn.get_key(user)
+    
+    # --- ИЗМЕНЕНИЕ: Используем новый метод get_subscription_url ---
+    key = await services.vpn.get_subscription_url(user)
+    # -----------------------------------------------------------
 
     match callback.data:
         case NavDownload.PLATFORM_IOS:
