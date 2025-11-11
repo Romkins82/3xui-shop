@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+# Расположение: romkins82/3xui-shop/3xui-shop-801875a292110cf72a87578e0dffa0f1157117de/app/bot/routers/subscription/aggregator_handler.py
+
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
 import asyncio
 import base64
 import logging
@@ -98,6 +103,7 @@ async def get_aggregated_subscription(request: Request) -> Response:
         if client_data:
             upload = client_data._traffic_up
             download = client_data._traffic_down
+<<<<<<< HEAD
             total = client_data._traffic_total # Это будет -1 для безлимита
             expire_ts = client_data._expiry_timestamp
 
@@ -108,6 +114,12 @@ async def get_aggregated_subscription(request: Request) -> Response:
             # так как 0 - это стандарт для "безлимита" в Subscription-Userinfo.
             total_for_header = total if total > 0 else 0
             # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+=======
+            total = client_data._traffic_total
+            expire_ts = client_data._expiry_timestamp
+
+            total_for_header = total if total > 0 else (upload + download)
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
 
             user_info_parts = [
                 f"upload={upload}",
@@ -207,4 +219,8 @@ async def get_aggregated_subscription(request: Request) -> Response:
 
     except Exception as e:
         logger.exception(f"FATAL unhandled error in aggregator: {e}")
+<<<<<<< HEAD
         return Response(status=500, text="Internal Server Error")
+=======
+        return Response(status=500, text="Internal Server Error")
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31

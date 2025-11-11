@@ -3,11 +3,19 @@ from __future__ import annotations
 
 import logging
 import uuid
+<<<<<<< HEAD
 from typing import TYPE_CHECKING, Optional 
 from contextlib import nullcontext 
 
 from py3xui import Client, Inbound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker 
+=======
+from typing import TYPE_CHECKING, Optional # Добавлен Optional
+from contextlib import nullcontext # Добавить импорт
+
+from py3xui import Client, Inbound
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker # Добавлен AsyncSession
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
 
 from app.bot.models import ClientData
 from app.bot.utils.formatting import format_remaining_time
@@ -20,7 +28,11 @@ from app.config import Config
 from app.db.models import User, Promocode
 
 if TYPE_CHECKING:
+<<<<<<< HEAD
     from .server_pool import Connection, ServerPoolService 
+=======
+    from .server_pool import Connection, ServerPoolService # Добавлен Connection
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +51,19 @@ class VPNService:
 
     async def _find_client_on_server(self, user: User, connection: Connection) -> Client | None: # Уточнен тип connection
         """
+<<<<<<< HEAD
         Надежный метод для поиска клиента (КОНФИГУРАЦИИ) на конкретном сервере.
         Итерирует по всем клиентам всех инбаундов.
         ВНИМАНИЕ: Этот метод возвращает объект КОНФИГА, а не СТАТИСТИКИ.
+=======
+        Надежный метод для поиска клиента на конкретном сервере.
+        Итерирует по всем клиентам всех инбаундов.
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
         """
         try:
             inbounds = await connection.api.inbound.get_list()
             for inbound in inbounds:
+<<<<<<< HEAD
                 if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
                     for client in inbound.settings.clients:
                         if client.email == str(user.tg_id):
@@ -58,6 +76,24 @@ class VPNService:
 
     async def is_client_exists(self, user: User, session: Optional[AsyncSession] = None) -> Client | None: # Добавлен session
         """Проверяет наличие клиента (КОНФИГУРАЦИИ) хотя бы на одном из серверов."""
+=======
+                # ИСПРАВЛЕНО: Получаем клиентов напрямую из настроек инбаунда.
+                if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
+                    for client in inbound.settings.clients:
+                        # ИСПРАВЛЕНИЕ: Искать по email (tg_id), а не по vpn_id
+                        if client.email == str(user.tg_id):
+                            logger.debug(f"Client {user.tg_id} found on server {connection.server.name} in inbound {inbound.id}")
+                            # Добавляем inbound_id к объекту клиента для удобства
+                            client.inbound_id = inbound.id
+                            return client
+        except Exception as e:
+            logger.error(f"Error while searching for client {user.tg_id} on server {connection.server.name}: {e}")
+        return None
+
+    async def is_client_exists(self, user: User, session: Optional[AsyncSession] = None) -> Client | None: # Добавлен session
+        """Проверяет наличие клиента хотя бы на одном из серверов."""
+        # Используем переданную сессию, если она есть, иначе создаем новую
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
         use_session = session if session else self.session()
         _session_context = use_session if not session else nullcontext(use_session)
 
@@ -67,10 +103,15 @@ class VPNService:
                 connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=active_session) # Передаем сессию
                 if not connection:
                     continue
+<<<<<<< HEAD
+=======
+                # Передаем пользователя и соединение
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
                 client = await self._find_client_on_server(user, connection)
                 if client:
                     return client
 
+<<<<<<< HEAD
         logger.warning(f"Client (config) {user.tg_id} not found on any server.")
         return None
 
@@ -79,10 +120,17 @@ class VPNService:
         Находит limit_ip для клиента (по email) на любом сервере, где он есть.
         Используется в админ-панели для смены локации.
         """
+=======
+        logger.warning(f"Client {user.tg_id} not found on any server.")
+        return None
+
+    async def get_limit_ip(self, user: User, client: Client, session: Optional[AsyncSession] = None) -> int | None: # Добавлен session
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
         connection = await self.server_pool_service.get_connection(user, session=session) # Передаем сессию
         if not connection:
             servers = await self.server_pool_service.get_all_servers(session=session) # Передаем сессию
             if not servers: return None
+<<<<<<< HEAD
             # Пытаемся найти на любом сервере
             for server in servers:
                 connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=session)
@@ -91,6 +139,11 @@ class VPNService:
             if not connection:
                  logger.error(f"Не удалось найти ни одного живого сервера для get_limit_ip (user: {user.tg_id})")
                  return None
+=======
+            connection = await self.server_pool_service.get_connection_by_server_id(servers[0].id, session=session) # Передаем сессию
+
+        if not connection: return None
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
 
         try:
             inbounds: list[Inbound] = await connection.api.inbound.get_list()
@@ -106,6 +159,7 @@ class VPNService:
                         logger.debug(f"Client {user.tg_id} limit ip: {inbound_client.limit_ip}")
                         return inbound_client.limit_ip
 
+<<<<<<< HEAD
         logger.critical(f"Client {user.tg_id} not found in inbounds on server {connection.server.name} (get_limit_ip).")
         return None
 
@@ -188,6 +242,37 @@ class VPNService:
             
             # Приводим к единому формату
             if traffic_total is None or traffic_total <= 0:
+=======
+        logger.critical(f"Client {client.email} not found in inbounds on server {connection.server.name}.")
+        return None
+
+
+    async def get_client_data(self, user: User, session: Optional[AsyncSession] = None) -> ClientData | None: # Добавлен session
+        logger.debug(f"Starting to retrieve client data for {user.tg_id}.")
+
+        client: Client | None = None
+
+        if user.server_id:
+            connection = await self.server_pool_service.get_connection(user, session=session) # Передаем сессию
+            if connection:
+                client = await self._find_client_on_server(user, connection)
+                if not client:
+                    logger.warning(f"Client {user.tg_id} not found on primary server {connection.server.name}. Searching on others.")
+
+        if not client:
+            client = await self.is_client_exists(user, session=session) # Передаем сессию
+
+        if not client:
+            logger.info(f"Could not get client data: Client {user.tg_id} not found on ANY server.")
+            return None
+
+        try:
+            limit_ip = await self.get_limit_ip(user=user, client=client, session=session) # Передаем сессию
+            max_devices = -1 if limit_ip == 0 else limit_ip
+            traffic_total = client.total
+            expiry_time = -1 if client.expiry_time == 0 else client.expiry_time
+            if traffic_total <= 0:
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
                 traffic_remaining = -1
                 traffic_total = -1 # -1 для "безлимита"
             else:
@@ -210,6 +295,7 @@ class VPNService:
             )
             logger.debug(f"Успешно получены АГРЕГИРОВАННЫЕ данные клиента для {user.tg_id}: {client_data}.")
             return client_data
+<<<<<<< HEAD
 
         except Exception as exception: # <--- ЭТОТ БЛОК ТЕПЕРЬ НА СВОЕМ МЕСТЕ
             logger.error(f"Ошибка при АГРЕГИРОВАННОЙ обработке данных клиента для {user.tg_id}: {exception}", exc_info=True)
@@ -222,6 +308,17 @@ class VPNService:
             logger.warning(f"User {user.tg_id} has no vpn_id to generate subscription URL.")
             return None
 
+=======
+        except Exception as exception:
+            logger.error(f"Error processing client data for {user.tg_id}: {exception}")
+            return None
+
+    async def get_subscription_url(self, user: User) -> str | None:
+        if not user.vpn_id:
+            logger.warning(f"User {user.tg_id} has no vpn_id to generate subscription URL.")
+            return None
+
+>>>>>>> 64c5ec2856e08f4dfaa55dd416edcd912103af31
         sub_url = f"{self.config.bot.DOMAIN}/sub/{user.vpn_id}"
         logger.debug(f"Generated subscription URL for {user.tg_id}: {sub_url}")
         return sub_url
