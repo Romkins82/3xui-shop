@@ -264,7 +264,15 @@ async def handle_view_user_info(
         if client_data:
             expiry_time_str = client_data.expiry_time_str or _("status:unlimited_or_not_set")
             traffic_total_str = client_data.traffic_total or _("status:unlimited")
-            traffic_remaining_str = client_data.traffic_remaining or _("status:unlimited")
+            
+            # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+            # Раньше было:
+            # traffic_remaining_str = client_data.traffic_remaining or _("status:unlimited")
+            #
+            # Теперь мы берем ИСПОЛЬЗОВАННЫЙ трафик:
+            traffic_used_str = client_data.traffic_used or _("status:unlimited")
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+            
             max_devices_val = client_data.max_devices
             max_devices_str = str(max_devices_val) if max_devices_val != UNLIMITED else _("status:unlimited")
             
@@ -279,7 +287,12 @@ async def handle_view_user_info(
                 devices=max_devices_str,
                 expiry_time=expiry_time_str,
                 traffic_total=traffic_total_str,
-                traffic_remaining=traffic_remaining_str,
+                # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                # Передаем использованный трафик в поле 'traffic_remaining',
+                # так как строка перевода ("user_editor:info:xui_data")
+                # ожидает {traffic_remaining} / {traffic_total}
+                traffic_remaining=traffic_used_str,
+                # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
                 status=status_text
             )
         else:

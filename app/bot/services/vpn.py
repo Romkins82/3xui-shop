@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Optional # Добавлен Optional
-from contextlib import nullcontext # Добавить импорт
+from typing import TYPE_CHECKING, Optional 
+from contextlib import nullcontext 
 
 from py3xui import Client, Inbound
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker # Добавлен AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker 
 
 from app.bot.models import ClientData
 from app.bot.utils.formatting import format_remaining_time
@@ -20,7 +20,7 @@ from app.config import Config
 from app.db.models import User, Promocode
 
 if TYPE_CHECKING:
-    from .server_pool import Connection, ServerPoolService # Добавлен Connection
+    from .server_pool import Connection, ServerPoolService 
 
 logger = logging.getLogger(__name__)
 
@@ -39,28 +39,25 @@ class VPNService:
 
     async def _find_client_on_server(self, user: User, connection: Connection) -> Client | None: # Уточнен тип connection
         """
-        Надежный метод для поиска клиента на конкретном сервере.
+        Надежный метод для поиска клиента (КОНФИГУРАЦИИ) на конкретном сервере.
         Итерирует по всем клиентам всех инбаундов.
+        ВНИМАНИЕ: Этот метод возвращает объект КОНФИГА, а не СТАТИСТИКИ.
         """
         try:
             inbounds = await connection.api.inbound.get_list()
             for inbound in inbounds:
-                # ИСПРАВЛЕНО: Получаем клиентов напрямую из настроек инбаунда.
                 if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
                     for client in inbound.settings.clients:
-                        # ИСПРАВЛЕНИЕ: Искать по email (tg_id), а не по vpn_id
                         if client.email == str(user.tg_id):
-                            logger.debug(f"Client {user.tg_id} found on server {connection.server.name} in inbound {inbound.id}")
-                            # Добавляем inbound_id к объекту клиента для удобства
+                            logger.debug(f"Client (config) {user.tg_id} found on server {connection.server.name} in inbound {inbound.id}")
                             client.inbound_id = inbound.id
                             return client
         except Exception as e:
-            logger.error(f"Error while searching for client {user.tg_id} on server {connection.server.name}: {e}")
+            logger.error(f"Error while searching for client (config) {user.tg_id} on server {connection.server.name}: {e}")
         return None
 
     async def is_client_exists(self, user: User, session: Optional[AsyncSession] = None) -> Client | None: # Добавлен session
-        """Проверяет наличие клиента хотя бы на одном из серверов."""
-        # Используем переданную сессию, если она есть, иначе создаем новую
+        """Проверяет наличие клиента (КОНФИГУРАЦИИ) хотя бы на одном из серверов."""
         use_session = session if session else self.session()
         _session_context = use_session if not session else nullcontext(use_session)
 
@@ -70,22 +67,30 @@ class VPNService:
                 connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=active_session) # Передаем сессию
                 if not connection:
                     continue
-                # Передаем пользователя и соединение
                 client = await self._find_client_on_server(user, connection)
                 if client:
                     return client
 
-        logger.warning(f"Client {user.tg_id} not found on any server.")
+        logger.warning(f"Client (config) {user.tg_id} not found on any server.")
         return None
 
     async def get_limit_ip(self, user: User, client: Client, session: Optional[AsyncSession] = None) -> int | None: # Добавлен session
+        """
+        Находит limit_ip для клиента (по email) на любом сервере, где он есть.
+        Используется в админ-панели для смены локации.
+        """
         connection = await self.server_pool_service.get_connection(user, session=session) # Передаем сессию
         if not connection:
             servers = await self.server_pool_service.get_all_servers(session=session) # Передаем сессию
             if not servers: return None
-            connection = await self.server_pool_service.get_connection_by_server_id(servers[0].id, session=session) # Передаем сессию
-
-        if not connection: return None
+            # Пытаемся найти на любом сервере
+            for server in servers:
+                connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=session)
+                if connection:
+                    break # Нашли первое доступное соединение
+            if not connection:
+                 logger.error(f"Не удалось найти ни одного живого сервера для get_limit_ip (user: {user.tg_id})")
+                 return None
 
         try:
             inbounds: list[Inbound] = await connection.api.inbound.get_list()
@@ -96,59 +101,121 @@ class VPNService:
         for inbound in inbounds:
             if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
                 for inbound_client in inbound.settings.clients:
-                    if inbound_client.email == client.email:
-                        logger.debug(f"Client {client.email} limit ip: {inbound_client.limit_ip}")
+                    # Сравниваем по email (tg_id)
+                    if inbound_client.email == str(user.tg_id):
+                        logger.debug(f"Client {user.tg_id} limit ip: {inbound_client.limit_ip}")
                         return inbound_client.limit_ip
 
-        logger.critical(f"Client {client.email} not found in inbounds on server {connection.server.name}.")
+        logger.critical(f"Client {user.tg_id} not found in inbounds on server {connection.server.name} (get_limit_ip).")
         return None
 
+    # --- НАЧАЛО ИСПРАВЛЕНИЯ (SyntaxError) ---
+    async def get_client_data(self, user: User, session: Optional[AsyncSession] = None) -> ClientData | None:
+        logger.debug(f"Начинаем АГРЕГИРОВАННОЕ извлечение данных клиента для {user.tg_id}.")
 
-    async def get_client_data(self, user: User, session: Optional[AsyncSession] = None) -> ClientData | None: # Добавлен session
-        logger.debug(f"Starting to retrieve client data for {user.tg_id}.")
+        try: # <--- ДОБАВЛЕН БЛОК TRY
+            total_up: int = 0
+            total_down: int = 0
+            
+            # Настройки подписки (должны быть одинаковы на всех серверах)
+            max_devices: int | None = None
+            traffic_total: int | None = None
+            expiry_time: int | None = None
+            
+            use_session = session if session else self.session()
+            _session_context = use_session if not session else nullcontext(use_session)
 
-        client: Client | None = None
+            async with _session_context as active_session:
+                servers = await self.server_pool_service.get_all_servers(session=active_session)
+                if not servers:
+                    logger.warning(f"Нет серверов в пуле для получения данных {user.tg_id}")
+                    return None
 
-        if user.server_id:
-            connection = await self.server_pool_service.get_connection(user, session=session) # Передаем сессию
-            if connection:
-                client = await self._find_client_on_server(user, connection)
-                if not client:
-                    logger.warning(f"Client {user.tg_id} not found on primary server {connection.server.name}. Searching on others.")
+                for server in servers:
+                    connection = await self.server_pool_service.get_connection_by_server_id(server.id, session=active_session)
+                    if not connection or not connection.server.online:
+                        logger.debug(f"Сервер {server.name} оффлайн или недоступен, пропускаем.")
+                        continue
 
-        if not client:
-            client = await self.is_client_exists(user, session=session) # Передаем сессию
+                    try:
+                        inbounds = await connection.api.inbound.get_list()
+                        if not inbounds:
+                            logger.warning(f"Нет инбаундов на сервере {connection.server.name}, пропускаем.")
+                            continue
+                        
+                        for inbound in inbounds:
+                            # 1. Ищем статистику
+                            if hasattr(inbound, 'client_stats') and inbound.client_stats:
+                                for stat in inbound.client_stats:
+                                    if stat.email == str(user.tg_id):
+                                        logger.debug(f"Найдена статистика для {user.tg_id} на {server.name}: up={stat.up}, down={stat.down}")
+                                        total_up += stat.up
+                                        total_down += stat.down
+                                        
+                                        # 2. Если это первый раз, когда мы нашли пользователя,
+                                        #    берем его настройки (лимиты, срок)
+                                        if max_devices is None:
+                                            logger.debug(f"Получаем настройки подписки для {user.tg_id} с сервера {server.name}")
+                                            traffic_total = stat.total
+                                            expiry_time = -1 if stat.expiry_time == 0 else stat.expiry_time
+                                            
+                                            # Ищем конфиг этого же клиента, чтобы взять limit_ip
+                                            if hasattr(inbound.settings, 'clients') and inbound.settings.clients:
+                                                for config in inbound.settings.clients:
+                                                    if config.email == str(user.tg_id):
+                                                        limit_ip = config.limit_ip if config else 0
+                                                        max_devices = -1 if limit_ip == 0 else limit_ip
+                                                        break # Нашли конфиг
+                                            
+                                            if max_devices is None: # Если вдруг не нашли конфиг
+                                                logger.warning(f"Не удалось найти конфиг для {user.tg_id} на {server.name}, limit_ip будет 0")
+                                                max_devices = 0 # Ставим 0 (безлимит) по умолчанию
 
-        if not client:
-            logger.info(f"Could not get client data: Client {user.tg_id} not found on ANY server.")
-            return None
+                                        break # Нашли статистику в этом инбаунде, идем к следующему
+                            
+                    except Exception as e:
+                        logger.error(f"Ошибка при получении данных с сервера {server.name} для {user.tg_id}: {e}")
+                
+                # --- Конец цикла по серверам ---
 
-        try:
-            limit_ip = await self.get_limit_ip(user=user, client=client, session=session) # Передаем сессию
-            max_devices = -1 if limit_ip == 0 else limit_ip
-            traffic_total = client.total
-            expiry_time = -1 if client.expiry_time == 0 else client.expiry_time
-            if traffic_total <= 0:
+            # 3. Собираем финальный ClientData
+            if max_devices is None:
+                # Пользователь не найден ни на одном сервере
+                logger.warning(f"Пользователь {user.tg_id} не найден ни на одном из {len(servers)} серверов.")
+                return None
+
+            traffic_used = total_up + total_down
+            
+            # Приводим к единому формату
+            if traffic_total is None or traffic_total <= 0:
                 traffic_remaining = -1
-                traffic_total = -1
+                traffic_total = -1 # -1 для "безлимита"
             else:
-                traffic_remaining = client.total - (client.up + client.down)
-            traffic_used = client.up + client.down
+                traffic_remaining = traffic_total - traffic_used
+                if traffic_remaining < 0:
+                    traffic_remaining = 0
+            
+            if expiry_time is None:
+                expiry_time = -1
+
             client_data = ClientData(
                 max_devices=max_devices,
                 traffic_total=traffic_total,
                 traffic_remaining=traffic_remaining,
-                traffic_used=traffic_used,
-                traffic_up=client.up,
-                traffic_down=client.down,
+                traffic_used=traffic_used,       # <-- Агрегированная сумма
+                traffic_up=total_up,           # <-- Агрегированная сумма
+                traffic_down=total_down,       # <-- Агрегированная сумма
                 expiry_timestamp=expiry_time,
                 expiry_time_str=format_remaining_time(expiry_time),
             )
-            logger.debug(f"Successfully retrieved client data for {user.tg_id}: {client_data}.")
+            logger.debug(f"Успешно получены АГРЕГИРОВАННЫЕ данные клиента для {user.tg_id}: {client_data}.")
             return client_data
-        except Exception as exception:
-            logger.error(f"Error processing client data for {user.tg_id}: {exception}")
+
+        except Exception as exception: # <--- ЭТОТ БЛОК ТЕПЕРЬ НА СВОЕМ МЕСТЕ
+            logger.error(f"Ошибка при АГРЕГИРОВАННОЙ обработке данных клиента для {user.tg_id}: {exception}", exc_info=True)
             return None
+    # --- КОНЕЦ ИСПРАВЛЕНИЯ (SyntaxError) ---
+
 
     async def get_subscription_url(self, user: User) -> str | None:
         if not user.vpn_id:

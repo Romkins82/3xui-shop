@@ -226,18 +226,22 @@ class ServerPoolService:
                  if server_id in self._servers: # Доп. проверка
                     conn = self._servers[server_id]
                     db_server = db_server_map[server_id] # Берем данные без users
-                    # Обновляем данные сервера в пуле из БД, если они изменились
+                    
+                    # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+                    # Обновляем атрибуты существующего объекта, а не заменяем его
                     if (conn.server.name != db_server.name or
                         conn.server.host != db_server.host or
                         conn.server.max_clients != db_server.max_clients or
                         conn.server.location != db_server.location):
+                        
                         logger.debug(f"Updating server core data in pool for {db_server.name} ({server_id}).")
-                        # Сохраняем статус online и users из пула
-                        current_online = conn.server.online
-                        current_users = conn.server.users if hasattr(conn.server, 'users') else [] # Проверка
-                        conn.server = db_server # Обновляем основные данные
-                        conn.server.online = current_online # Восстанавливаем статус online из пула
-                        conn.server.users = current_users # Восстанавливаем users
+                        conn.server.name = db_server.name
+                        conn.server.host = db_server.host
+                        conn.server.max_clients = db_server.max_clients
+                        conn.server.location = db_server.location
+                        # Атрибуты 'online' и 'users' мы не трогаем,
+                        # они остаются теми, что были в 'conn.server'
+                    # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
                     # Принудительно переподключаемся для проверки актуальности и статуса online
                     await self.refresh_server(conn.server) # refresh_server обновит статус online в БД
@@ -412,16 +416,16 @@ class ServerPoolService:
             online_server_ids = [conn.server.id for conn in self._servers.values() if conn.server.online]
             if not online_server_ids:
                  return []
-
-            # Загружаем серверы с пользователями
+    
+                # Загружаем серверы с пользователями
             result = await active_session.execute(
                 select(Server)
                 .options(selectinload(Server.users)) # Загружаем пользователей
                 .where(Server.id.in_(online_server_ids))
             )
             online_servers_with_users = result.scalars().all()
-
-            # Фильтруем по количеству клиентов
+    
+                # Фильтруем по количеству клиентов
             available_servers = [
                 s for s in online_servers_with_users if hasattr(s, 'users') and s.current_clients < s.max_clients # Проверка
             ]

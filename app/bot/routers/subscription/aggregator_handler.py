@@ -1,11 +1,10 @@
-# Расположение: romkins82/3xui-shop/3xui-shop-801875a292110cf72a87578e0dffa0f1157117de/app/bot/routers/subscription/aggregator_handler.py
-
 import asyncio
 import base64
 import logging
 import ssl
 import urllib.parse
 from typing import TYPE_CHECKING
+import json 
 
 import aiohttp
 from aiohttp import TCPConnector
@@ -56,7 +55,7 @@ def build_response_headers(encoded_title: str, user_info_header: str = None) -> 
         'Expires': '0',
 
         # Интервал обновления
-        'Profile-Update-Interval': '1',
+        'Profile-Update-Interval': '120',
 
         # Тип профиля
         'Profile-Type': 'subscription',
@@ -100,10 +99,16 @@ async def get_aggregated_subscription(request: Request) -> Response:
         if client_data:
             upload = client_data._traffic_up
             download = client_data._traffic_down
-            total = client_data._traffic_total
+            total = client_data._traffic_total # Это будет -1 для безлимита
             expire_ts = client_data._expiry_timestamp
 
-            total_for_header = total if total > 0 else (upload + download)
+            # --- НАЧАЛО ИСПРАВЛЕНИЯ ---
+            # Если total (из _traffic_total) > 0, используем его.
+            # Если total = -1 (или 0), что означает "безлимит", 
+            # мы должны отправить 0 в заголовке,
+            # так как 0 - это стандарт для "безлимита" в Subscription-Userinfo.
+            total_for_header = total if total > 0 else 0
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
             user_info_parts = [
                 f"upload={upload}",
@@ -166,12 +171,48 @@ async def get_aggregated_subscription(request: Request) -> Response:
                         logger.info(f"Content from {current_server.name} is not Base64. Treating as plain text.")
                         decoded_content = raw_content
 
+                    # --- НАЧАЛО БЛОКА ИСПРАВЛЕНИЙ ---
                     if decoded_content:
                         logger.info(f"Successfully processed content from {current_server.name}.")
                         config_lines = decoded_content.splitlines()
                         for line in config_lines:
-                            base_line = line.split('#')[0]
-                            all_configs.append(f"{base_line}#{current_server.name}")
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            new_name = current_server.name  # Имя, которое мы хотим установить
+
+                            if line.startswith("vless://"):
+                                # VLESS: Имя находится после последнего #
+                                base_line = line.rsplit('#', 1)[0]
+                                all_configs.append(f"{base_line}#{new_name}")
+
+                            elif line.startswith("vmess://"):
+                                # VMESS: Имя - это ключ "ps" внутри Base64
+                                try:
+                                    base64_part = line[len("vmess://"):]
+                                    # Добавляем padding, если Base64 его требует
+                                    padding = '=' * (4 - len(base64_part) % 4)
+                                    decoded_json_str = base64.b64decode(base64_part + padding).decode('utf-8')
+                                    
+                                    config_json = json.loads(decoded_json_str)
+                                    config_json["ps"] = new_name  # Устанавливаем новое имя
+                                    
+                                    # Кодируем обратно
+                                    new_json_str = json.dumps(config_json, separators=(',', ':'))
+                                    new_base64_part = base64.b64encode(new_json_str.encode('utf-8')).decode('utf-8').rstrip('=')
+                                    
+                                    all_configs.append(f"vmess://{new_base64_part}")
+                                except Exception as e:
+                                    logger.error(f"Failed to process vmess link for {new_name}: {e}. Appending name as fallback.")
+                                    # Резервный вариант (вероятно, не сработает, но безопаснее, чем ничего)
+                                    base_line = line.rsplit('#', 1)[0]
+                                    all_configs.append(f"{base_line}#{new_name}")
+                            else:
+                                # Резервный вариант для других типов (trojan, etc.)
+                                base_line = line.rsplit('#', 1)[0]
+                                all_configs.append(f"{base_line}#{new_name}")
+                    # --- КОНЕЦ БЛОКА ИСПРАВЛЕНИЙ ---
                     else:
                         logger.warning(f"Decoded content from {current_server.name} is empty after processing.")
 
