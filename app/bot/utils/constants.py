@@ -1,13 +1,13 @@
 # region: Download
-APP_IOS_LINK = "https://apps.apple.com/en/app/v2raytun/id6476628951"
-APP_ANDROID_LINK = "https://play.google.com/store/apps/details?id=com.v2raytun.android"
+APP_IOS_LINK = "https://apps.apple.com/ru/app/happ-proxy-utility-plus/id6746188973"
+APP_ANDROID_LINK = "https://play.google.com/store/apps/details?id=com.happproxy"
 APP_WINDOWS_LINK = (
-    "https://storage.v2raytun.com/v2RayTun_Setup.exe"
+    "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x86.exe"
 )
 
-APP_IOS_SCHEME = "v2raytun://import/"
-APP_ANDROID_SCHEME = "v2raytun://import/"
-APP_WINDOWS_SCHEME = "v2raytun://import/"
+APP_IOS_SCHEME = "happ://add/"
+APP_ANDROID_SCHEME = "happ://add/"
+APP_WINDOWS_SCHEME = "happ://add/"
 
 # endregion
 
@@ -46,7 +46,7 @@ EVENT_PAYMENT_CANCELED_TAG = "#EventPaymentCanceled"
 # endregion
 
 # region: I18n settings
-DEFAULT_LANGUAGE = "ru"
+DEFAULT_LANGUAGE = "en"
 I18N_DOMAIN = "bot"
 # endregion
 

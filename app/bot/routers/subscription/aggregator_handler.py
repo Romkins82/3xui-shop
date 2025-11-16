@@ -171,7 +171,7 @@ async def get_aggregated_subscription(request: Request) -> Response:
                         logger.info(f"Content from {current_server.name} is not Base64. Treating as plain text.")
                         decoded_content = raw_content
 
-                    # --- НАЧАЛО БЛОКА ИСПРАВЛЕНИЙ ---
+                    # --- НАЧАЛО БЛОКА ИСПРАВЛЕНИЙ (ПОПЫТКА 5) ---
                     if decoded_content:
                         logger.info(f"Successfully processed content from {current_server.name}.")
                         config_lines = decoded_content.splitlines()
@@ -182,34 +182,105 @@ async def get_aggregated_subscription(request: Request) -> Response:
                             
                             new_name = current_server.name  # Имя, которое мы хотим установить
 
-                            if line.startswith("vless://"):
-                                # VLESS: Имя находится после последнего #
+                            if line.startswith("vless://") or line.startswith("trojan://"):
+                                # VLESS / Trojan
                                 base_line = line.rsplit('#', 1)[0]
+                                
+                                params = []
+                                query_string = ""
+                                base_line_no_query = base_line
+
+                                if "?" in base_line:
+                                    base_line_no_query, query_string = base_line.split("?", 1)
+                                    params = [p for p in query_string.split("&") if p] # Сохраняем существующие
+                                
+                                # Фильтруем существующие параметры
+                                params = [
+                                    p for p in params 
+                                    if not p.startswith("allowInsecure=") and 
+                                       not p.startswith("allow_insecure=") and
+                                       not p.startswith("skip-cert-verify=")
+                                ]
+                                
+                                # Добавляем все варианты
+                                params.append("allowInsecure=true")
+                                params.append("allow_insecure=true")
+                                params.append("skip-cert-verify=true") # Добавляем еще один!
+                                
+                                # Собираем обратно
+                                base_line = f"{base_line_no_query}?{'&'.join(params)}"
+
                                 all_configs.append(f"{base_line}#{new_name}")
 
                             elif line.startswith("vmess://"):
                                 # VMESS: Имя - это ключ "ps" внутри Base64
                                 try:
                                     base64_part = line[len("vmess://"):]
-                                    # Добавляем padding, если Base64 его требует
                                     padding = '=' * (4 - len(base64_part) % 4)
                                     decoded_json_str = base64.b64decode(base64_part + padding).decode('utf-8')
                                     
                                     config_json = json.loads(decoded_json_str)
-                                    config_json["ps"] = new_name  # Устанавливаем новое имя
                                     
-                                    # Кодируем обратно
-                                    new_json_str = json.dumps(config_json, separators=(',', ':'))
+                                    # --- НАЧАЛО НОРМАЛИЗАЦИИ (из pipeline.py) ---
+                                    
+                                    # 1. Меняем 'ps' (имя)
+                                    config_json["ps"] = new_name
+                                    
+                                    # 2. Нормализуем 'port' в строку
+                                    if "port" in config_json:
+                                        config_json["port"] = str(config_json["port"])
+                                    
+                                    # 3. Нормализуем 'allowInsecure' в 1 (int), а не true (bool)
+                                    allow_insecure_val = config_json.get("allowInsecure", False)
+                                    if isinstance(allow_insecure_val, str):
+                                        allow_insecure_val = allow_insecure_val.strip().lower() in {"1", "true", "yes", "y", "on"}
+                                    
+                                    # ВСЕГДА СТАВИМ 1, как в DEFAULTS_IF_MISSING
+                                    config_json["allowInsecure"] = 1
+                                    
+                                    # 4. Добавляем недостающие поля, как в DEFAULTS_IF_MISSING
+                                    if "aid" not in config_json:
+                                        config_json["aid"] = "0"
+                                    if "alpn" not in config_json:
+                                        config_json["alpn"] = ""
+                                    if "type" not in config_json:
+                                        config_json["type"] = ""
+                                        
+                                    # 5. Убедимся, что 'v' на месте
+                                    if "v" not in config_json:
+                                        config_json["v"] = "2"
+                                        
+                                    # --- КОНЕЦ НОРМАЛИЗАЦИИ ---
+
+                                    # 6. (КРИТИЧЕСКИ ВАЖНО) Сортируем ключи, как в pipeline.py
+                                    wanted_order = [
+                                        "add","aid","allowInsecure","alpn","fp","host","id","net","path",
+                                        "port","ps","scy","sni","tls","type","v"
+                                    ]
+                                    
+                                    ordered_config = {}
+                                    # Сначала ключи из wanted_order
+                                    for k in wanted_order:
+                                        if k in config_json:
+                                            ordered_config[k] = config_json[k]
+                                    
+                                    # Добавляем остальные ключи, которых нет в списке
+                                    for k, v in config_json.items():
+                                        if k not in ordered_config:
+                                            ordered_config[k] = v
+                                    
+                                    # 7. Кодируем отсортированный JSON
+                                    new_json_str = json.dumps(ordered_config, ensure_ascii=False, separators=(",", ":"))
                                     new_base64_part = base64.b64encode(new_json_str.encode('utf-8')).decode('utf-8').rstrip('=')
                                     
                                     all_configs.append(f"vmess://{new_base64_part}")
+                                    
                                 except Exception as e:
                                     logger.error(f"Failed to process vmess link for {new_name}: {e}. Appending name as fallback.")
-                                    # Резервный вариант (вероятно, не сработает, но безопаснее, чем ничего)
                                     base_line = line.rsplit('#', 1)[0]
                                     all_configs.append(f"{base_line}#{new_name}")
                             else:
-                                # Резервный вариант для других типов (trojan, etc.)
+                                # Резервный вариант для других типов
                                 base_line = line.rsplit('#', 1)[0]
                                 all_configs.append(f"{base_line}#{new_name}")
                     # --- КОНЕЦ БЛОКА ИСПРАВЛЕНИЙ ---
